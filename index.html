@@ -44,6 +44,12 @@
             </div>
           </div>
           <dl id="profile-details" class="details"></dl>
+          <div class="button-row profile-file-actions">
+            <button id="import-profile" type="button" data-operation>公式v37プロファイルを読み込む</button>
+            <button id="export-profile" type="button" disabled>公式形式で書き出す</button>
+            <button id="apply-profile" type="button" class="primary" data-operation disabled>実機へ適用</button>
+            <input id="profile-file" type="file" accept=".bin,.dat" hidden />
+          </div>
           <pre id="profile-head" hidden></pre>
           <p id="profile-hint" class="empty-hint">まだプロファイルを読み込んでいません。</p>
         </section>
@@ -176,11 +182,19 @@
             <div>
               <p class="section-kicker">KEY BINDINGS</p>
               <h2>キーバインド</h2>
-              <p>v37プロファイルの32個の4バイトエントリを編集します。公式UIで確認できた論理ボタン名を表示し、予約・動的スロットと未確定のバイト値は生のまま保持します。</p>
+              <p>公式アプリと同じく、コントローラーの入力ごとにマッピングを選びます。クリックするとコントローラー入力・キーボード入力・Nullを選択できます。</p>
             </div>
           </div>
+          <div class="keymap-toolbar">
+            <p>表示名が確定している21入力を一覧にし、未確定のプロファイル値は下の詳細欄でそのまま確認できます。</p>
+            <span id="keymap-summary" class="status-pill">32スロット</span>
+          </div>
           <div id="keymap-grid" class="keymap-grid"></div>
-          <p class="analysis-note">各スロットはプロファイルの <code>0x164 + 4 × index</code> に対応します。byte0はtype、byte1～3はmode 1で参照されるターゲットのハードウェアビット番号です。8桁の16進数で入力してください。</p>
+          <details class="keymap-raw-details">
+            <summary>詳細: 32個の生バイトを表示</summary>
+            <div id="keymap-raw-grid" class="keymap-raw-grid"></div>
+          </details>
+          <p class="analysis-note">各スロットはプロファイルの <code>0x164 + 4 × index</code> に対応します。選択画面で変更した既知の形式以外は、生の4バイトを保持します。M2連射は実機で確定した <code>0x140: 00/01</code> を切り替えます。M1/M3/M4は未確定部分を保持します。</p>
         </section>
 
         <section id="settings-device-section" class="panel settings-section" hidden>
@@ -287,6 +301,33 @@
           </div>
         </section>
       </div>
+
+      <dialog id="keymap-dialog" class="keymap-dialog" aria-labelledby="keymap-dialog-title">
+        <div class="keymap-dialog-shell">
+          <div class="keymap-dialog-heading">
+            <div>
+              <p class="section-kicker">KEY SELECTION</p>
+              <h2 id="keymap-dialog-title">コントローラーのキーボードのキー一覧</h2>
+              <p id="keymap-dialog-subtitle">入力を選択して「確認」を押してください。</p>
+            </div>
+            <button id="keymap-dialog-close" class="dialog-close" type="button" aria-label="閉じる">×</button>
+          </div>
+          <div class="keymap-dialog-tabs" role="tablist" aria-label="入力種別">
+            <button id="keymap-controller-tab" class="dialog-tab active" type="button" role="tab" aria-selected="true">コントローラー</button>
+            <button id="keymap-keyboard-tab" class="dialog-tab" type="button" role="tab" aria-selected="false">キーボード</button>
+          </div>
+          <div id="keymap-controller-panel" role="tabpanel">
+            <div id="keymap-controller-grid" class="key-choice-grid controller-choice-grid"></div>
+          </div>
+          <div id="keymap-keyboard-panel" role="tabpanel" hidden>
+            <div id="keymap-keyboard-grid" class="key-choice-grid keyboard-choice-grid"></div>
+          </div>
+          <div class="keymap-dialog-footer">
+            <button id="keymap-dialog-cancel" type="button">キャンセル</button>
+            <button id="keymap-dialog-confirm" class="primary" type="button" disabled>確認</button>
+          </div>
+        </div>
+      </dialog>
 
       <p id="message" role="status">準備しています…</p>
     </main>

@@ -48,6 +48,60 @@ async fn read_profile(state: tauri::State<'_, AppState>) -> Result<ProfileSummar
 }
 
 #[tauri::command]
+async fn load_profile(
+    state: tauri::State<'_, AppState>,
+    profile: Vec<u8>,
+) -> Result<ProfileSummary, String> {
+    let read = tauri::async_runtime::spawn_blocking(move || device::load_profile_summary(profile))
+        .await
+        .map_err(|error| error.to_string())??;
+    let device::ProfileRead {
+        summary,
+        device_path,
+        profile,
+    } = read;
+    *state
+        .cached_profile
+        .lock()
+        .map_err(|_| "profile cache lock was poisoned".to_string())? = Some(CachedProfile {
+        device_path,
+        profile,
+    });
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn apply_profile(
+    state: tauri::State<'_, AppState>,
+    profile: Vec<u8>,
+) -> Result<ProfileSummary, String> {
+    let cached = state
+        .cached_profile
+        .lock()
+        .map_err(|_| "profile cache lock was poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "load or read a profile before applying it".to_string())?;
+    let device_path = cached.device_path.clone();
+    let read =
+        tauri::async_runtime::spawn_blocking(move || device::apply_profile(profile, device_path))
+            .await
+            .map_err(|error| error.to_string())??;
+    let device::ProfileRead {
+        summary,
+        device_path,
+        profile,
+    } = read;
+    *state
+        .cached_profile
+        .lock()
+        .map_err(|_| "profile cache lock was poisoned".to_string())? = Some(CachedProfile {
+        device_path,
+        profile,
+    });
+    Ok(summary)
+}
+
+#[tauri::command]
 async fn set_vibration(
     state: tauri::State<'_, AppState>,
     settings: VibrationSettingsInput,
@@ -124,6 +178,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_device,
             read_profile,
+            load_profile,
+            apply_profile,
             set_vibration,
             set_controller_settings,
             read_device_settings,

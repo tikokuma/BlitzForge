@@ -11,6 +11,10 @@ pub const V37_RIGHT_VIBRATION_MAX_OFFSET: usize = 0x14d;
 pub const V37_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00c;
 pub const V37_LEFT_DEFAULT_CURVE_OFFSET: usize = 0x00e;
 pub const V37_RIGHT_DEFAULT_CURVE_OFFSET: usize = 0x03a;
+pub const V37_M2_RAPID_FIRE_OFFSET: usize = 0x140;
+pub const V37_M1_RAPID_FIRE_OFFSET: usize = 0x146;
+const V37_TURBO_KEY_MASK_LENGTH: usize = 4;
+const V37_M2_RAPID_FIRE_BIT: u8 = 0x01;
 pub const V37_KEYMAP_OFFSET: usize = 0x164;
 pub const V37_KEYMAP_ENTRY_COUNT: usize = 32;
 pub const V37_KEYMAP_ENTRY_LENGTH: usize = 4;
@@ -55,11 +59,20 @@ pub struct StepAccuracySettings {
     pub extension: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RapidFireSettings {
+    pub m1: Option<bool>,
+    pub m2: Option<bool>,
+    pub m3: Option<bool>,
+    pub m4: Option<bool>,
+}
+
 #[derive(Clone, Copy)]
 pub struct ControllerSettings {
     pub rectangle_algorithm: bool,
     pub left_curve: CurveSettings,
     pub right_curve: CurveSettings,
+    pub rapid_fire: RapidFireSettings,
     pub key_bindings: [[u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
 }
 
@@ -188,6 +201,29 @@ pub fn stored_profile_crc(profile: &[u8]) -> Result<u16, String> {
         .ok_or_else(|| "profile is too short".into())
 }
 
+pub fn normalize_v37_profile(input: &[u8]) -> Result<Vec<u8>, String> {
+    let profile = if input.len() == V37_PROFILE_LENGTH {
+        input
+    } else if input.len() == V37_PROFILE_LENGTH + 4 && input[..4] == [0xa4, 0xd7, 0xe4, 0x01] {
+        &input[4..]
+    } else {
+        return Err(format!(
+            "expected a {V37_PROFILE_LENGTH}-byte v37 profile or a single framed profile"
+        ));
+    };
+    if declared_profile_length(profile) != Some(V37_PROFILE_LENGTH) {
+        return Err("profile header does not declare 484 bytes".into());
+    }
+    let stored = stored_profile_crc(profile)?;
+    let computed = profile_crc(profile)?;
+    if stored != computed {
+        return Err(format!(
+            "invalid profile CRC: stored {stored:04X}, computed {computed:04X}"
+        ));
+    }
+    Ok(profile.to_vec())
+}
+
 pub fn vibration_settings(profile: &[u8]) -> Result<VibrationSettings, String> {
     if profile.len() != V37_PROFILE_LENGTH {
         return Err("expected a 484-byte v37 profile".into());
@@ -213,8 +249,29 @@ pub fn controller_settings(profile: &[u8]) -> Result<ControllerSettings, String>
         rectangle_algorithm: profile[V37_RECTANGULAR_ALGORITHM_OFFSET] & 0x10 != 0,
         left_curve: read_curve(profile, V37_LEFT_DEFAULT_CURVE_OFFSET, "left")?,
         right_curve: read_curve(profile, V37_RIGHT_DEFAULT_CURVE_OFFSET, "right")?,
+        rapid_fire: rapid_fire_settings(profile)?,
         key_bindings: read_key_bindings(profile),
     })
+}
+
+pub fn rapid_fire_settings(profile: &[u8]) -> Result<RapidFireSettings, String> {
+    if profile.len() != V37_PROFILE_LENGTH {
+        return Err("expected a 484-byte v37 profile".into());
+    }
+    Ok(RapidFireSettings {
+        m1: decode_rapid_fire_byte(profile[V37_M1_RAPID_FIRE_OFFSET], 0x80),
+        m2: Some(profile[V37_M2_RAPID_FIRE_OFFSET] & V37_M2_RAPID_FIRE_BIT != 0),
+        m3: None,
+        m4: None,
+    })
+}
+
+fn decode_rapid_fire_byte(value: u8, enabled_value: u8) -> Option<bool> {
+    match value {
+        0 => Some(false),
+        value if value == enabled_value => Some(true),
+        _ => None,
+    }
 }
 
 pub fn set_controller_settings(
@@ -223,6 +280,7 @@ pub fn set_controller_settings(
     left_curve: CurveSettings,
     right_curve: CurveSettings,
     key_bindings: [[u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
+    rapid_fire: RapidFireSettings,
 ) -> Result<(), String> {
     if profile.len() != V37_PROFILE_LENGTH {
         return Err("expected a 484-byte v37 profile".into());
@@ -241,7 +299,20 @@ pub fn set_controller_settings(
         "right",
     )?;
     write_key_bindings(profile, key_bindings)?;
+    if let Some(enabled) = rapid_fire.m2 {
+        set_m2_rapid_fire(profile, enabled);
+    }
     Ok(())
+}
+
+fn set_m2_rapid_fire(profile: &mut [u8], enabled: bool) {
+    let mask = &mut profile
+        [V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + V37_TURBO_KEY_MASK_LENGTH];
+    if enabled {
+        mask[0] |= V37_M2_RAPID_FIRE_BIT;
+    } else {
+        mask[0] &= !V37_M2_RAPID_FIRE_BIT;
+    }
 }
 
 fn read_key_bindings(profile: &[u8]) -> [[u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT] {
@@ -477,6 +548,24 @@ mod tests {
     }
 
     #[test]
+    fn accepts_raw_and_single_framed_v37_profiles() {
+        let profile = profile();
+        assert_eq!(normalize_v37_profile(&profile).unwrap(), profile);
+
+        let mut framed = vec![0xa4, 0xd7, 0xe4, 0x01];
+        framed.extend_from_slice(&profile);
+        assert_eq!(normalize_v37_profile(&framed).unwrap(), profile);
+
+        let mut invalid = profile;
+        invalid[10] ^= 0x01;
+        assert!(
+            normalize_v37_profile(&invalid)
+                .unwrap_err()
+                .contains("invalid profile CRC")
+        );
+    }
+
+    #[test]
     fn v37_profile_uses_nine_valid_fragments() {
         let profile = profile();
         let reports = build_v37_write_reports(&profile).unwrap();
@@ -582,6 +671,12 @@ mod tests {
                 stabilization: 0,
             },
             [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
+            RapidFireSettings {
+                m1: None,
+                m2: Some(false),
+                m3: None,
+                m4: None,
+            },
         )
         .unwrap();
 
@@ -639,6 +734,12 @@ mod tests {
                 stabilization: 0,
             },
             key_bindings,
+            RapidFireSettings {
+                m1: None,
+                m2: Some(false),
+                m3: None,
+                m4: None,
+            },
         )
         .unwrap();
 
@@ -646,6 +747,80 @@ mod tests {
         assert_eq!(settings.key_bindings[0], [0x01, 0x02, 0x03, 0x04]);
         assert_eq!(settings.key_bindings[31], [0xa0, 0xb0, 0xc0, 0xd0]);
         assert_ne!(settings.left_curve.center, settings.right_curve.center);
+    }
+
+    #[test]
+    fn isolates_m2_rapid_fire_to_the_observed_byte() {
+        let mut profile = profile();
+        profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 8] = 100;
+        profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 9] = 100;
+        profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 8] = 100;
+        profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 9] = 100;
+        let crc = profile_crc(&profile).unwrap();
+        profile[..2].copy_from_slice(&crc.to_be_bytes());
+        let original = profile.clone();
+        set_controller_settings(
+            &mut profile,
+            false,
+            CurveSettings {
+                center: 0,
+                point1_x: 0,
+                point1_y: 0,
+                point2_x: 0,
+                point2_y: 0,
+                edge: 0,
+                stabilization: 0,
+            },
+            CurveSettings {
+                center: 0,
+                point1_x: 0,
+                point1_y: 0,
+                point2_x: 0,
+                point2_y: 0,
+                edge: 0,
+                stabilization: 0,
+            },
+            [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
+            RapidFireSettings {
+                m1: None,
+                m2: Some(true),
+                m3: None,
+                m4: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(profile[V37_M2_RAPID_FIRE_OFFSET], 0x01);
+        assert_eq!(
+            &profile[2..V37_M2_RAPID_FIRE_OFFSET],
+            &original[2..V37_M2_RAPID_FIRE_OFFSET]
+        );
+        assert_eq!(
+            &profile[V37_M2_RAPID_FIRE_OFFSET + 1..],
+            &original[V37_M2_RAPID_FIRE_OFFSET + 1..]
+        );
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(true));
+    }
+
+    #[test]
+    fn toggles_only_m2_bit_in_turbo_key_mask() {
+        let mut profile = profile();
+        profile[V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + 4]
+            .copy_from_slice(&[0x80, 0x22, 0x33, 0x44]);
+
+        set_m2_rapid_fire(&mut profile, true);
+        assert_eq!(
+            &profile[V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + 4],
+            &[0x81, 0x22, 0x33, 0x44]
+        );
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(true));
+
+        set_m2_rapid_fire(&mut profile, false);
+        assert_eq!(
+            &profile[V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + 4],
+            &[0x80, 0x22, 0x33, 0x44]
+        );
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(false));
     }
 
     #[test]

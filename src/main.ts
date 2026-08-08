@@ -17,10 +17,18 @@ type CurveSettings = {
   stabilization: number;
 };
 
+type RapidFireSettings = {
+  m1: boolean | null;
+  m2: boolean | null;
+  m3: boolean | null;
+  m4: boolean | null;
+};
+
 type ControllerSettings = {
   rectangleAlgorithm: boolean;
   leftStick: CurveSettings;
   rightStick: CurveSettings;
+  rapidFire: RapidFireSettings;
   keyBindings: string[];
 };
 
@@ -45,12 +53,14 @@ type ProfileSummary = {
   head: string;
   vibration: VibrationSettings;
   settings: ControllerSettings;
+  rawProfile: number[];
 };
 
 type ControllerSettingsInput = {
   rectangleAlgorithm: boolean;
   leftStick: CurveSettings;
   rightStick: CurveSettings;
+  rapidFire: { m2: boolean | null };
   keyBindings: string[];
 };
 
@@ -78,6 +88,7 @@ type VibrationWriteResult = {
   crc: string;
   ack: string;
   ackValue: number;
+  rawProfile: number[];
 };
 
 const VIBRATION_PRESETS: Record<Exclude<VibrationMode, "custom">, VibrationSettings> = {
@@ -106,6 +117,7 @@ type ControllerSettingsWriteResult = {
   crc: string;
   ack: string;
   ackValue: number;
+  rawProfile: number[];
 };
 
 const curveRangeIds = [
@@ -152,6 +164,78 @@ const KEYMAP_SLOT_LABELS = [
   "動的/未割当",
 ] as const;
 
+type KeymapChoice =
+  | { kind: "identity"; label: string }
+  | { kind: "controller"; slot: number; label: string }
+  | { kind: "keyboard"; usage: number; label: string }
+  | { kind: "none"; label: "Null" };
+
+const KEYMAP_VISIBLE_SOURCES = [
+  { slot: 23, label: "M1" },
+  { slot: 24, label: "M2" },
+  { slot: 25, label: "M3" },
+  { slot: 26, label: "M4" },
+  { slot: 0, label: "A" },
+  { slot: 1, label: "B" },
+  { slot: 3, label: "X" },
+  { slot: 4, label: "Y" },
+  { slot: 16, label: "Up" },
+  { slot: 17, label: "Down" },
+  { slot: 18, label: "Left" },
+  { slot: 19, label: "Right" },
+  { slot: 8, label: "LT" },
+  { slot: 6, label: "LB" },
+  { slot: 9, label: "RT" },
+  { slot: 7, label: "RB" },
+  { slot: 13, label: "L3" },
+  { slot: 14, label: "R3" },
+  { slot: 10, label: "View" },
+  { slot: 11, label: "Menu" },
+  { slot: 15, label: "Share" },
+] as const;
+
+const KEYMAP_CONTROLLER_CHOICES: readonly KeymapChoice[] = [
+  { kind: "controller", slot: 0, label: "A" },
+  { kind: "controller", slot: 1, label: "B" },
+  { kind: "controller", slot: 3, label: "X" },
+  { kind: "controller", slot: 4, label: "Y" },
+  { kind: "controller", slot: 16, label: "Up" },
+  { kind: "controller", slot: 17, label: "Down" },
+  { kind: "controller", slot: 18, label: "Left" },
+  { kind: "controller", slot: 19, label: "Right" },
+  { kind: "controller", slot: 8, label: "LT" },
+  { kind: "controller", slot: 6, label: "LB" },
+  { kind: "controller", slot: 9, label: "RT" },
+  { kind: "controller", slot: 7, label: "RB" },
+  { kind: "controller", slot: 13, label: "L3" },
+  { kind: "controller", slot: 14, label: "R3" },
+  { kind: "controller", slot: 10, label: "View" },
+  { kind: "controller", slot: 11, label: "Menu" },
+  { kind: "controller", slot: 23, label: "M1" },
+  { kind: "controller", slot: 24, label: "M2" },
+  { kind: "controller", slot: 25, label: "M3" },
+  { kind: "controller", slot: 26, label: "M4" },
+  { kind: "controller", slot: 15, label: "Share" },
+  { kind: "none", label: "Null" },
+];
+
+const KEYBOARD_KEYS = [
+  ["1", 0x1e], ["2", 0x1f], ["3", 0x20], ["4", 0x21], ["5", 0x22], ["6", 0x23], ["7", 0x24], ["8", 0x25], ["9", 0x26], ["0", 0x27], ["Num1", 0x59],
+  ["Num2", 0x5a], ["Num3", 0x5b], ["Num4", 0x5c], ["Num5", 0x5d], ["Num6", 0x5e], ["Num7", 0x5f], ["Num8", 0x60], ["Num9", 0x61], ["Num0", 0x62], ["A", 0x04], ["B", 0x05],
+  ["C", 0x06], ["D", 0x07], ["E", 0x08], ["F", 0x09], ["G", 0x0a], ["H", 0x0b], ["I", 0x0c], ["J", 0x0d], ["K", 0x0e], ["L", 0x0f], ["M", 0x10],
+  ["N", 0x11], ["O", 0x12], ["P", 0x13], ["Q", 0x14], ["R", 0x15], ["S", 0x16], ["T", 0x17], ["U", 0x18], ["V", 0x19], ["W", 0x1a], ["X", 0x1b],
+  ["Y", 0x1c], ["Z", 0x1d], ["F1", 0x3a], ["F2", 0x3b], ["F3", 0x3c], ["F4", 0x3d], ["F5", 0x3e], ["F6", 0x3f], ["F7", 0x40], ["F8", 0x41], ["F9", 0x42],
+  ["F10", 0x43], ["F11", 0x44], ["F12", 0x45], ["~", 0x35], ["Esc", 0x29], ["Tab", 0x2b], ["Space", 0x2c], ["Caps Lock", 0x39], ["Enter", 0x28], ["Left", 0x50], ["Right", 0x4f],
+  ["Up", 0x52], ["Down", 0x51], ["Print Screen", 0x46], ["L Ctrl", 0xe0], ["L Shift", 0xe1], ["L Alt", 0xe2], ["L Win", 0xe3], ["R Ctrl", 0xe4], ["R Shift", 0xe5], ["R Alt", 0xe6], ["R Win", 0xe7],
+  ["Insert", 0x49], ["Delete", 0x4c], ["Home", 0x4a], ["End", 0x4d], ["Page Up", 0x4b], ["Page Down", 0x4e], ["-", 0x2d], ["+", 0x2e], ["Backspace", 0x2a], ["[", 0x2f], ["]", 0x30],
+  ["\\", 0x31], [";", 0x33], ["'", 0x34], [",", 0x36], [".", 0x37], ["/", 0x38],
+] as const;
+
+const KEYMAP_DEFAULT_ENTRY = "00000000";
+const KEYMAP_CONTROLLER_TYPE = 0x01;
+const KEYMAP_KEYBOARD_TYPE = 0x02;
+const KEYMAP_NO_TARGET = 0xff;
+
 const POLLING_RATE_OPTIONS = [
   { code: 2, hz: 250 },
   { code: 1, hz: 500 },
@@ -188,6 +272,10 @@ let curveDrafts: Record<Stick, CurveSettings> = {
   leftStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
   rightStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
 };
+let rapidFireDraft: RapidFireSettings = { m1: null, m2: null, m3: null, m4: null };
+let keymapDraft: string[] = Array.from({ length: 32 }, () => KEYMAP_DEFAULT_ENTRY);
+let activeKeymapSlot: number | null = null;
+let pendingKeymapChoice: KeymapChoice | null = null;
 let deviceSettingsDraft: DeviceSettings = {
   pollingRate: 0,
   stepAccuracy: { mode: 0, value: 0, extension: 0 },
@@ -217,6 +305,9 @@ function syncActions() {
   byId<HTMLButtonElement>("save-vibration").disabled = busy || !currentProfile || !vibrationDirty;
   byId<HTMLButtonElement>("refresh-device-settings").disabled = busy || !currentProfile;
   byId<HTMLButtonElement>("save-device-settings").disabled = busy || !currentProfile || !deviceSettingsDirty;
+  byId<HTMLButtonElement>("import-profile").disabled = busy || !deviceConnected || settingsDirty || vibrationDirty;
+  byId<HTMLButtonElement>("export-profile").disabled = busy || !currentProfile || settingsDirty || vibrationDirty;
+  byId<HTMLButtonElement>("apply-profile").disabled = busy || !currentProfile || settingsDirty || vibrationDirty;
 }
 
 function showDetails(target: HTMLElement, rows: Array<[string, string]>) {
@@ -279,6 +370,9 @@ function renderProfile(profile: ProfileSummary) {
     ["CRC", `${profile.storedCrc} / ${profile.computedCrc} (${crcState})`],
     ["振動", `左 ${profile.vibration.left.min}–${profile.vibration.left.max} / 右 ${profile.vibration.right.min}–${profile.vibration.right.max}`],
     ["矩形アルゴリズム", profile.settings.rectangleAlgorithm ? "有効" : "無効"],
+    ["連射", profile.settings.rapidFire.m2 === null
+      ? "M2: 不明"
+      : `M2: ${profile.settings.rapidFire.m2 ? "有効" : "無効"}`],
   ]);
   const head = byId<HTMLPreElement>("profile-head");
   head.textContent = profile.head;
@@ -435,6 +529,20 @@ function keymapTargetLabel(value: number): string {
   return value < KEYMAP_SLOT_LABELS.length ? KEYMAP_SLOT_LABELS[value] : "予約/未割当";
 }
 
+function normalizeKeymapEntry(raw: string): string {
+  const compact = raw.replace(/[^0-9a-f]/gi, "").toUpperCase();
+  return /^[0-9A-F]{8}$/.test(compact) ? compact : KEYMAP_DEFAULT_ENTRY;
+}
+
+function parseKeymapEntry(raw: string): number[] | null {
+  if (!/^[0-9A-F]{8}$/.test(raw)) return null;
+  return raw.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? null;
+}
+
+function formatKeymapBytes(bytes: number[]): string {
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
 function describeKeymapEntry(raw: string): string {
   if (!/^[0-9A-F]{8}$/.test(raw)) {
     return "byte0～3: 8桁の16進数を入力";
@@ -446,55 +554,265 @@ function describeKeymapEntry(raw: string): string {
   return [`byte0: type ${formatHexByte(bytes[0])}`, ...targets].join(" / ");
 }
 
-function renderKeymap(keyBindings: string[]) {
+function keymapChoiceForEntry(raw: string, sourceSlot: number): KeymapChoice | null {
+  const bytes = parseKeymapEntry(raw);
+  if (!bytes) return null;
+  if (bytes.every((byte) => byte === 0)) {
+    return { kind: "identity", label: KEYMAP_SLOT_LABELS[sourceSlot] ?? "標準" };
+  }
+  if (bytes[0] === KEYMAP_CONTROLLER_TYPE) {
+    if (bytes[1] === KEYMAP_NO_TARGET) return { kind: "none", label: "Null" };
+    const label = KEYMAP_SLOT_LABELS[bytes[1]];
+    return label && !label.startsWith("動的") && !label.startsWith("予約")
+      ? { kind: "controller", slot: bytes[1], label }
+      : null;
+  }
+  if (bytes[0] === KEYMAP_KEYBOARD_TYPE) {
+    const keyboard = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[2])
+      ?? KEYBOARD_KEYS.find(([, usage]) => usage === bytes[1]);
+    return keyboard ? { kind: "keyboard", usage: keyboard[1], label: keyboard[0] } : null;
+  }
+  return null;
+}
+
+function keymapDisplay(raw: string, sourceSlot: number): { label: string; detail: string; choice: KeymapChoice | null } {
+  const choice = keymapChoiceForEntry(raw, sourceSlot);
+  if (!choice) {
+    return { label: "生バイト", detail: describeKeymapEntry(raw), choice: null };
+  }
+  if (choice.kind === "identity") {
+    return { label: choice.label, detail: "標準マッピング / 00000000", choice };
+  }
+  return { label: choice.label, detail: `選択済み / ${raw}`, choice };
+}
+
+function rapidFireForSlot(slot: number): boolean | null {
+  if (slot === 23) return rapidFireDraft.m1;
+  if (slot === 24) return rapidFireDraft.m2;
+  if (slot === 25) return rapidFireDraft.m3;
+  if (slot === 26) return rapidFireDraft.m4;
+  return null;
+}
+
+function toggleM2RapidFire() {
+  if (rapidFireDraft.m2 === null) return;
+  rapidFireDraft.m2 = !rapidFireDraft.m2;
+  renderKeymapRows();
+  markSettingsDirty();
+}
+
+function encodeKeymapChoice(choice: KeymapChoice): string {
+  if (choice.kind === "identity") return KEYMAP_DEFAULT_ENTRY;
+  if (choice.kind === "none") {
+    return formatKeymapBytes([KEYMAP_CONTROLLER_TYPE, KEYMAP_NO_TARGET, KEYMAP_NO_TARGET, KEYMAP_NO_TARGET]);
+  }
+  if (choice.kind === "controller") {
+    return formatKeymapBytes([KEYMAP_CONTROLLER_TYPE, choice.slot, KEYMAP_NO_TARGET, KEYMAP_NO_TARGET]);
+  }
+  return formatKeymapBytes([KEYMAP_KEYBOARD_TYPE, 0x00, choice.usage, 0x00]);
+}
+
+function keymapChoiceKey(choice: KeymapChoice | null): string {
+  if (!choice) return "";
+  if (choice.kind === "controller") return `controller:${choice.slot}`;
+  if (choice.kind === "keyboard") return `keyboard:${choice.usage}`;
+  return choice.kind;
+}
+
+function renderKeymapRows() {
   const container = byId("keymap-grid");
   container.replaceChildren(
-    ...Array.from({ length: 32 }, (_, index) => {
-      const row = document.createElement("label");
+    ...KEYMAP_VISIBLE_SOURCES.map(({ slot, label }) => {
+      const row = document.createElement("div");
       row.className = "keymap-row";
-      row.htmlFor = `keymap-entry-${index}`;
 
-      const name = document.createElement("div");
-      name.className = "keymap-name";
-      const title = document.createElement("span");
-      title.textContent = `${KEYMAP_SLOT_LABELS[index]} / スロット ${String(index + 1).padStart(2, "0")}`;
-      const hint = document.createElement("small");
-      hint.className = "keymap-hint";
+      const sourceCell = document.createElement("div");
+      sourceCell.className = "keymap-source-cell";
+      const source = document.createElement("span");
+      source.className = "keymap-source";
+      source.textContent = label;
+      const sourceHint = document.createElement("small");
+      sourceHint.className = "keymap-hint";
+      sourceHint.textContent = `スロット ${String(slot + 1).padStart(2, "0")} / 0x${(0x164 + slot * 4).toString(16).toUpperCase().padStart(3, "0")}`;
+      sourceCell.append(source, sourceHint);
 
-      const input = document.createElement("input");
-      input.id = `keymap-entry-${index}`;
-      input.type = "text";
-      input.inputMode = "text";
-      input.maxLength = 8;
-      input.pattern = "[0-9A-Fa-f]{8}";
-      input.value = (keyBindings[index] ?? "00000000").toUpperCase();
-      input.dataset.keymapEntry = String(index);
-      input.setAttribute("aria-label", `${KEYMAP_SLOT_LABELS[index]} キーバインド スロット ${index + 1}`);
-      const updateHint = () => {
-        hint.textContent = describeKeymapEntry(input.value);
-      };
-      input.addEventListener("input", () => {
-        input.value = input.value.replace(/[^0-9a-f]/gi, "").slice(0, 8).toUpperCase();
-        updateHint();
-        markSettingsDirty();
-      });
-      input.addEventListener("change", () => {
-        input.value = input.value.padStart(8, "0").slice(-8).toUpperCase();
-        updateHint();
-        markSettingsDirty();
-      });
-      name.append(title, hint);
-      updateHint();
-      row.append(name, input);
+      const mapping = keymapDisplay(keymapDraft[slot] ?? KEYMAP_DEFAULT_ENTRY, slot);
+      const mappingButton = document.createElement("button");
+      mappingButton.className = "keymap-mapping";
+      mappingButton.type = "button";
+      mappingButton.textContent = mapping.label;
+      mappingButton.dataset.keymapSlot = String(slot);
+      mappingButton.setAttribute("aria-label", `${label} のマッピング: ${mapping.label}`);
+      mappingButton.addEventListener("click", () => openKeymapDialog(slot));
+
+      const mappingCell = document.createElement("div");
+      mappingCell.className = "keymap-mapping-cell";
+      mappingCell.append(mappingButton);
+      const mappingHint = document.createElement("small");
+      mappingHint.className = "keymap-hint keymap-mapping-hint";
+      mappingHint.textContent = mapping.detail;
+      mappingCell.append(mappingHint);
+
+      const rapidState = rapidFireForSlot(slot);
+      const rapid = document.createElement(slot === 24 ? "button" : "span");
+      rapid.className = slot === 24 ? "keymap-rapid keymap-rapid-toggle" : "keymap-rapid";
+      if (rapid instanceof HTMLButtonElement) {
+        rapid.type = "button";
+        rapid.disabled = rapidState === null;
+        rapid.setAttribute("aria-pressed", String(rapidState === true));
+        rapid.addEventListener("click", toggleM2RapidFire);
+        rapid.title = rapidState === null ? "M2連射の保存値を判定できません" : "M2連射を切り替えます";
+      } else {
+        rapid.title = rapidState === null ? "この連射フラグは未解析です" : "読み取り専用の連射状態";
+      }
+      const rapidDot = document.createElement("span");
+      rapidDot.className = "keymap-rapid-dot";
+      if (rapidState === true) rapidDot.classList.add("enabled");
+      if (rapidState === null) rapidDot.classList.add("unknown");
+      rapid.append("連射", rapidDot);
+
+      row.append(sourceCell, mappingCell, rapid);
       return row;
     }),
   );
 }
 
+function renderKeymapRaw() {
+  const container = byId("keymap-raw-grid");
+  container.replaceChildren(
+    ...Array.from({ length: 32 }, (_, index) => {
+      const row = document.createElement("label");
+      row.className = "keymap-raw-row";
+      const name = document.createElement("span");
+      name.textContent = `${KEYMAP_SLOT_LABELS[index]} / slot ${String(index + 1).padStart(2, "0")}`;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.inputMode = "text";
+      input.maxLength = 8;
+      input.pattern = "[0-9A-Fa-f]{8}";
+      input.value = keymapDraft[index] ?? KEYMAP_DEFAULT_ENTRY;
+      input.dataset.keymapEntry = String(index);
+      input.setAttribute("aria-label", `${KEYMAP_SLOT_LABELS[index]} キーバインド スロット ${index + 1}`);
+      input.addEventListener("input", () => {
+        input.value = input.value.replace(/[^0-9a-f]/gi, "").slice(0, 8).toUpperCase();
+        keymapDraft[index] = input.value;
+        renderKeymapRows();
+        updateKeymapSummary();
+        markSettingsDirty();
+      });
+      input.addEventListener("change", () => {
+        input.value = normalizeKeymapEntry(input.value);
+        keymapDraft[index] = input.value;
+        renderKeymapRows();
+        updateKeymapSummary();
+        markSettingsDirty();
+      });
+      const hint = document.createElement("small");
+      hint.className = "keymap-hint";
+      hint.textContent = describeKeymapEntry(input.value);
+      row.append(name, input, hint);
+      return row;
+    }),
+  );
+}
+
+function updateKeymapSummary() {
+  const configured = keymapDraft.filter((entry) => entry !== KEYMAP_DEFAULT_ENTRY).length;
+  byId("keymap-summary").textContent = configured === 0 ? "標準マッピング" : `${configured}スロット変更済み`;
+}
+
+function renderKeymap(keyBindings: string[], rapidFire: RapidFireSettings) {
+  rapidFireDraft = { ...rapidFire };
+  keymapDraft = Array.from({ length: 32 }, (_, index) => normalizeKeymapEntry(keyBindings[index] ?? KEYMAP_DEFAULT_ENTRY));
+  renderKeymapRows();
+  renderKeymapRaw();
+  updateKeymapSummary();
+}
+
 function readKeymap(): string[] {
-  return Array.from(document.querySelectorAll<HTMLInputElement>("[data-keymap-entry]"))
-    .sort((left, right) => Number(left.dataset.keymapEntry) - Number(right.dataset.keymapEntry))
-    .map((input) => input.value.trim().toUpperCase());
+  return keymapDraft.map((entry) => entry.trim().toUpperCase());
+}
+
+function updateKeymapDialogSelection() {
+  const selected = keymapChoiceKey(pendingKeymapChoice);
+  document.querySelectorAll<HTMLButtonElement>("[data-keymap-choice]").forEach((button) => {
+    button.classList.toggle("selected", button.dataset.keymapChoice === selected);
+  });
+  byId<HTMLButtonElement>("keymap-dialog-confirm").disabled = pendingKeymapChoice === null;
+}
+
+function renderKeymapChoiceButtons() {
+  const controllerContainer = byId("keymap-controller-grid");
+  controllerContainer.replaceChildren(
+    ...KEYMAP_CONTROLLER_CHOICES.map((choice) => {
+      const button = document.createElement("button");
+      button.className = `key-choice${choice.kind === "none" ? " key-choice-null" : ""}`;
+      button.type = "button";
+      button.textContent = choice.label;
+      button.dataset.keymapChoice = keymapChoiceKey(choice);
+      button.addEventListener("click", () => {
+        pendingKeymapChoice = choice;
+        updateKeymapDialogSelection();
+      });
+      return button;
+    }),
+  );
+
+  const keyboardContainer = byId("keymap-keyboard-grid");
+  keyboardContainer.replaceChildren(
+    ...KEYBOARD_KEYS.map(([label, usage]) => {
+      const button = document.createElement("button");
+      button.className = "key-choice";
+      button.type = "button";
+      button.textContent = label;
+      const choice: KeymapChoice = { kind: "keyboard", usage, label };
+      button.dataset.keymapChoice = keymapChoiceKey(choice);
+      button.addEventListener("click", () => {
+        pendingKeymapChoice = choice;
+        updateKeymapDialogSelection();
+      });
+      return button;
+    }),
+  );
+}
+
+function setKeymapDialogMode(mode: "controller" | "keyboard") {
+  const controller = mode === "controller";
+  byId("keymap-controller-panel").hidden = !controller;
+  byId("keymap-keyboard-panel").hidden = controller;
+  byId("keymap-controller-tab").classList.toggle("active", controller);
+  byId("keymap-keyboard-tab").classList.toggle("active", !controller);
+  byId("keymap-controller-tab").setAttribute("aria-selected", String(controller));
+  byId("keymap-keyboard-tab").setAttribute("aria-selected", String(!controller));
+  updateKeymapDialogSelection();
+}
+
+function openKeymapDialog(slot: number) {
+  activeKeymapSlot = slot;
+  const source = KEYMAP_SLOT_LABELS[slot] ?? `slot ${slot + 1}`;
+  pendingKeymapChoice = keymapChoiceForEntry(keymapDraft[slot] ?? KEYMAP_DEFAULT_ENTRY, slot);
+  byId("keymap-dialog-subtitle").textContent = `${source} のマッピングを選択してください。`;
+  renderKeymapChoiceButtons();
+  const current = pendingKeymapChoice?.kind === "keyboard" ? "keyboard" : "controller";
+  setKeymapDialogMode(current);
+  byId<HTMLDialogElement>("keymap-dialog").showModal();
+}
+
+function closeKeymapDialog() {
+  const dialog = byId<HTMLDialogElement>("keymap-dialog");
+  if (dialog.open) dialog.close();
+  activeKeymapSlot = null;
+  pendingKeymapChoice = null;
+}
+
+function confirmKeymapDialog() {
+  if (activeKeymapSlot === null || pendingKeymapChoice === null) return;
+  keymapDraft[activeKeymapSlot] = encodeKeymapChoice(pendingKeymapChoice);
+  renderKeymapRows();
+  renderKeymapRaw();
+  updateKeymapSummary();
+  closeKeymapDialog();
+  markSettingsDirty();
 }
 
 function updatePollingRateDisplay(value: number) {
@@ -624,6 +942,7 @@ function readSettingsInput(): ControllerSettingsInput {
     rectangleAlgorithm: byId<HTMLInputElement>("rectangle-algorithm").checked,
     leftStick: cloneCurve(curveDrafts.leftStick),
     rightStick: cloneCurve(curveDrafts.rightStick),
+    rapidFire: { m2: rapidFireDraft.m2 },
     keyBindings: readKeymap(),
   };
 }
@@ -641,6 +960,7 @@ function settingsEqual(settings: ControllerSettings, input: ControllerSettingsIn
   return settings.rectangleAlgorithm === input.rectangleAlgorithm
     && curvesEqual(settings.leftStick, input.leftStick)
     && curvesEqual(settings.rightStick, input.rightStick)
+    && settings.rapidFire.m2 === input.rapidFire.m2
     && settings.keyBindings.length === input.keyBindings.length
     && settings.keyBindings.every((value, index) => value.toUpperCase() === input.keyBindings[index].toUpperCase());
 }
@@ -737,7 +1057,7 @@ function renderSettings(profile: ProfileSummary) {
     leftStick: cloneCurve(settings.leftStick),
     rightStick: cloneCurve(settings.rightStick),
   };
-  renderKeymap(settings.keyBindings);
+  renderKeymap(settings.keyBindings, settings.rapidFire);
   selectedStick = "leftStick";
   byId<HTMLInputElement>("rectangle-algorithm").checked = settings.rectangleAlgorithm;
   setActiveCurve(cloneCurve(curveDrafts.leftStick));
@@ -834,6 +1154,57 @@ async function readProfile(openSettings = false) {
   }
 }
 
+async function importProfileFile(file: File) {
+  if (!deviceConnected) return;
+  setBusy(true, "公式v37プロファイルを検証しています…");
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const profile = await invoke<ProfileSummary>("load_profile", { profile: Array.from(bytes) });
+    currentProfile = profile;
+    renderProfile(profile);
+    renderSettings(profile);
+    showView("settings");
+    setMessage("公式v37プロファイルを読み込みました。実機へ適用する場合は概要の適用ボタンを押してください。");
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    byId<HTMLInputElement>("profile-file").value = "";
+    setBusy(false);
+  }
+}
+
+function exportProfile() {
+  if (!currentProfile) return;
+  const framed = new Uint8Array(4 + currentProfile.rawProfile.length);
+  framed.set([0xa4, 0xd7, 0xe4, 0x01]);
+  framed.set(currentProfile.rawProfile, 4);
+  const blob = new Blob([framed], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "bigbigwon-v37-profile-frame.bin";
+  link.click();
+  URL.revokeObjectURL(url);
+  setMessage("公式形式の488バイトv37プロファイルを書き出しました。");
+}
+
+async function applyProfile() {
+  if (!currentProfile || settingsDirty || vibrationDirty) return;
+  const profile = currentProfile;
+  setBusy(true, "プロファイル全体をコントローラーへ適用しています…");
+  try {
+    const result = await invoke<ProfileSummary>("apply_profile", { profile: profile.rawProfile });
+    currentProfile = result;
+    renderProfile(result);
+    renderSettings(result);
+    setMessage("公式v37プロファイルを実機へ適用しました。");
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
 async function refreshDeviceSettings() {
   const settings = await invoke<DeviceSettings>("read_device_settings");
   currentDeviceSettings = cloneDeviceSettings(settings);
@@ -858,6 +1229,7 @@ async function saveSettings() {
       computedCrc: result.crc,
       head: result.head,
       settings: result.settings,
+      rawProfile: result.rawProfile,
     };
     renderProfile(currentProfile);
     renderSettings(currentProfile);
@@ -882,6 +1254,7 @@ async function saveVibration() {
       vibration: result.vibration,
       storedCrc: result.crc,
       computedCrc: result.crc,
+      rawProfile: result.rawProfile,
     };
     renderProfile(currentProfile);
     renderSettings(currentProfile);
@@ -923,6 +1296,13 @@ window.addEventListener("DOMContentLoaded", () => {
       void readProfile(true);
     }
   });
+  byId("import-profile").addEventListener("click", () => byId<HTMLInputElement>("profile-file").click());
+  byId<HTMLInputElement>("profile-file").addEventListener("change", (event) => {
+    const file = (event.target as HTMLInputElement).files?.[0];
+    if (file) void importProfileFile(file);
+  });
+  byId("export-profile").addEventListener("click", exportProfile);
+  byId("apply-profile").addEventListener("click", () => void applyProfile());
   byId("back-home").addEventListener("click", () => showView("home"));
   byId("save-settings").addEventListener("click", () => void saveSettings());
   byId("save-vibration").addEventListener("click", () => void saveVibration());
@@ -932,6 +1312,15 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("tab-keymap").addEventListener("click", () => selectSettingsTab("keymap"));
   byId("tab-device").addEventListener("click", () => selectSettingsTab("device"));
   byId("tab-vibration").addEventListener("click", () => selectSettingsTab("vibration"));
+  byId("keymap-controller-tab").addEventListener("click", () => setKeymapDialogMode("controller"));
+  byId("keymap-keyboard-tab").addEventListener("click", () => setKeymapDialogMode("keyboard"));
+  byId("keymap-dialog-close").addEventListener("click", closeKeymapDialog);
+  byId("keymap-dialog-cancel").addEventListener("click", closeKeymapDialog);
+  byId("keymap-dialog-confirm").addEventListener("click", confirmKeymapDialog);
+  byId<HTMLDialogElement>("keymap-dialog").addEventListener("cancel", () => {
+    activeKeymapSlot = null;
+    pendingKeymapChoice = null;
+  });
   byId("stick-left-tab").addEventListener("click", () => selectStick("leftStick"));
   byId("stick-right-tab").addEventListener("click", () => selectStick("rightStick"));
   byId("rectangle-algorithm").addEventListener("change", markSettingsDirty);

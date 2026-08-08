@@ -23,6 +23,7 @@ pub struct ProfileSummary {
     head: String,
     vibration: VibrationSettingsSummary,
     settings: ControllerSettingsSummary,
+    raw_profile: Vec<u8>,
 }
 
 pub struct ProfileRead {
@@ -39,6 +40,7 @@ pub struct VibrationWriteResult {
     crc: String,
     ack: String,
     ack_value: u8,
+    raw_profile: Vec<u8>,
 }
 
 #[derive(Clone, Serialize)]
@@ -59,6 +61,7 @@ pub struct ControllerSettingsSummary {
     rectangle_algorithm: bool,
     left_stick: CurveSettingsSummary,
     right_stick: CurveSettingsSummary,
+    rapid_fire: RapidFireSummary,
     key_bindings: Vec<String>,
 }
 
@@ -69,6 +72,23 @@ pub struct ControllerSettingsInput {
     left_stick: CurveSettingsInput,
     right_stick: CurveSettingsInput,
     key_bindings: Vec<String>,
+    #[serde(default)]
+    rapid_fire: RapidFireInput,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RapidFireSummary {
+    m1: Option<bool>,
+    m2: Option<bool>,
+    m3: Option<bool>,
+    m4: Option<bool>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RapidFireInput {
+    m2: Option<bool>,
 }
 
 #[derive(Clone, Serialize)]
@@ -119,6 +139,7 @@ pub struct ControllerSettingsWriteResult {
     crc: String,
     ack: String,
     ack_value: u8,
+    raw_profile: Vec<u8>,
 }
 
 #[derive(Clone, Serialize)]
@@ -167,6 +188,24 @@ pub fn scan_device() -> Result<Option<DeviceSummary>, String> {
 
 pub fn read_profile_summary() -> Result<ProfileRead, String> {
     let (device, profile) = read_profile()?;
+    build_profile_read(device, profile)
+}
+
+pub fn load_profile_summary(input: Vec<u8>) -> Result<ProfileRead, String> {
+    let profile = protocol::normalize_v37_profile(&input)?;
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info(&api)
+        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    build_profile_read(summary(info), profile)
+}
+
+pub fn apply_profile(input: Vec<u8>, device_path: String) -> Result<ProfileRead, String> {
+    let profile = protocol::normalize_v37_profile(&input)?;
+    let (device, _, _) = write_profile(&profile, &device_path)?;
+    build_profile_read(device, profile)
+}
+
+fn build_profile_read(device: DeviceSummary, profile: Vec<u8>) -> Result<ProfileRead, String> {
     let stored_crc = protocol::stored_profile_crc(&profile)?;
     let computed_crc = protocol::profile_crc(&profile)?;
     let vibration = protocol::vibration_settings(&profile)?;
@@ -186,6 +225,7 @@ pub fn read_profile_summary() -> Result<ProfileRead, String> {
             head: spaced_hex(&profile[..profile.len().min(32)]),
             vibration: vibration_summary(vibration),
             settings,
+            raw_profile: profile.clone(),
         },
         device_path,
         profile,
@@ -217,6 +257,7 @@ pub fn set_vibration(
             crc: format!("{crc:04X}"),
             ack: spaced_hex(&ack),
             ack_value,
+            raw_profile: profile.clone(),
         },
         profile,
     ))
@@ -235,13 +276,26 @@ pub fn set_controller_settings(
         ));
     }
 
-    let key_bindings = parse_key_bindings(input.key_bindings)?;
+    let ControllerSettingsInput {
+        rectangle_algorithm,
+        left_stick,
+        right_stick,
+        key_bindings,
+        rapid_fire,
+    } = input;
+    let key_bindings = parse_key_bindings(key_bindings)?;
     protocol::set_controller_settings(
         &mut profile,
-        input.rectangle_algorithm,
-        input.left_stick.into_curve(),
-        input.right_stick.into_curve(),
+        rectangle_algorithm,
+        left_stick.into_curve(),
+        right_stick.into_curve(),
         key_bindings,
+        protocol::RapidFireSettings {
+            m1: None,
+            m2: rapid_fire.m2,
+            m3: None,
+            m4: None,
+        },
     )?;
     let crc = protocol::profile_crc(&profile)?;
     profile[..2].copy_from_slice(&crc.to_be_bytes());
@@ -256,6 +310,7 @@ pub fn set_controller_settings(
             crc: format!("{crc:04X}"),
             ack: spaced_hex(&ack),
             ack_value,
+            raw_profile: profile.clone(),
         },
         profile,
     ))
@@ -470,6 +525,12 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
             point2_y: settings.right_curve.point2_y,
             edge: settings.right_curve.edge,
             stabilization: settings.right_curve.stabilization,
+        },
+        rapid_fire: RapidFireSummary {
+            m1: settings.rapid_fire.m1,
+            m2: settings.rapid_fire.m2,
+            m3: settings.rapid_fire.m3,
+            m4: settings.rapid_fire.m4,
         },
         key_bindings: settings
             .key_bindings
