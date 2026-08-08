@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BIGBIGWON Lite</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Controller configuration</p>
+          <h1>BIGBIGWON Lite</h1>
+        </div>
+        <span id="connection" class="badge">確認中</span>
+      </header>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <h2>デバイス</h2>
+            <p id="device-name">接続を確認しています</p>
+          </div>
+          <button id="scan">再検索</button>
+        </div>
+        <dl id="device-details" class="details"></dl>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <h2>ベースプロファイル</h2>
+            <p>v37プロファイルを直接読み取ります。</p>
+          </div>
+          <button id="read" class="primary">読み取る</button>
+        </div>
+        <dl id="profile-details" class="details"></dl>
+        <pre id="profile-head" hidden></pre>
+        <div id="vibration-editor" class="editor" hidden>
+          <div class="editor-heading">
+            <div>
+              <h2>振動強度</h2>
+              <p>実機で確認済みの左右グリップだけを変更します。</p>
+            </div>
+            <button id="save-vibration" class="primary">保存</button>
+          </div>
+          <label for="vibration-left">
+            <span>左グリップ</span>
+            <output id="vibration-left-value">255</output>
+          </label>
+          <input id="vibration-left" type="range" min="0" max="255" value="255" />
+          <label for="vibration-right">
+            <span>右グリップ</span>
+            <output id="vibration-right-value">255</output>
+          </label>
+          <input id="vibration-right" type="range" min="0" max="255" value="255" />
+        </div>
+      </section>
+
+      <p id="message" role="status">準備しています…</p>
+    </main>
+  </body>
+</html>
