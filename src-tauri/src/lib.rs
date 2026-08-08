@@ -3,7 +3,11 @@ mod protocol;
 
 use std::sync::Mutex;
 
-use device::{DeviceSummary, ProfileSummary, VibrationWriteResult};
+use device::{
+    ControllerSettingsInput, ControllerSettingsWriteResult, DeviceSettingsInput,
+    DeviceSettingsSummary, DeviceSettingsWriteResult, DeviceSummary, ProfileSummary,
+    VibrationSettingsInput, VibrationWriteResult,
+};
 
 #[derive(Clone)]
 struct CachedProfile {
@@ -46,8 +50,7 @@ async fn read_profile(state: tauri::State<'_, AppState>) -> Result<ProfileSummar
 #[tauri::command]
 async fn set_vibration(
     state: tauri::State<'_, AppState>,
-    left: u8,
-    right: u8,
+    settings: VibrationSettingsInput,
 ) -> Result<VibrationWriteResult, String> {
     let cached = state
         .cached_profile
@@ -57,7 +60,7 @@ async fn set_vibration(
         .ok_or_else(|| "read the profile before saving".to_string())?;
     let device_path = cached.device_path.clone();
     let (result, profile) = tauri::async_runtime::spawn_blocking(move || {
-        device::set_vibration(cached.profile, cached.device_path, left, right)
+        device::set_vibration(cached.profile, cached.device_path, settings)
     })
     .await
     .map_err(|error| error.to_string())??;
@@ -71,6 +74,49 @@ async fn set_vibration(
     Ok(result)
 }
 
+#[tauri::command]
+async fn set_controller_settings(
+    state: tauri::State<'_, AppState>,
+    settings: ControllerSettingsInput,
+) -> Result<ControllerSettingsWriteResult, String> {
+    let cached = state
+        .cached_profile
+        .lock()
+        .map_err(|_| "profile cache lock was poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "read the profile before saving".to_string())?;
+    let device_path = cached.device_path.clone();
+    let (result, profile) = tauri::async_runtime::spawn_blocking(move || {
+        device::set_controller_settings(cached.profile, cached.device_path, settings)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    *state
+        .cached_profile
+        .lock()
+        .map_err(|_| "profile cache lock was poisoned".to_string())? = Some(CachedProfile {
+        device_path,
+        profile,
+    });
+    Ok(result)
+}
+
+#[tauri::command]
+async fn read_device_settings() -> Result<DeviceSettingsSummary, String> {
+    tauri::async_runtime::spawn_blocking(device::read_device_settings)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn set_device_settings(
+    settings: DeviceSettingsInput,
+) -> Result<DeviceSettingsWriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || device::set_device_settings(settings))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -78,7 +124,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_device,
             read_profile,
-            set_vibration
+            set_vibration,
+            set_controller_settings,
+            read_device_settings,
+            set_device_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
