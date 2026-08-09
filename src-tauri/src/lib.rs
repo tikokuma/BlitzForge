@@ -1,55 +1,84 @@
 mod device;
+mod profiles;
 mod protocol;
 
 use std::sync::{Arc, Mutex};
 
 use device::{
-    ControllerSettingsInput, ControllerSettingsWriteResult, DeviceSettingsInput,
-    DeviceSettingsSummary, DeviceSettingsWriteResult, DeviceSummary, MacroSummary,
-    MacroWriteResult, ProfileSummary, VibrationSettingsInput, VibrationWriteResult,
+    ControllerSettingsInput, DeviceSession, DeviceSettingsInput, DeviceSettingsSummary,
+    MacroSummary, MacroWriteResult, ProfileSummary, VibrationSettingsInput,
 };
-
-#[derive(Clone)]
-struct CachedProfile {
-    device_path: String,
-    profile: Vec<u8>,
-}
-
-#[derive(Default)]
-struct TransactionState {
-    cached_profile: Option<CachedProfile>,
-}
 
 #[derive(Default)]
 struct AppState {
-    hid_transaction: Arc<Mutex<TransactionState>>,
+    hid_transaction: Arc<Mutex<()>>,
+    profile_store: Arc<Mutex<profiles::ProfileStoreState>>,
 }
 
-fn cache_profile(state: &mut TransactionState, read: device::ProfileRead) -> ProfileSummary {
-    let device::ProfileRead {
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileDocumentView {
+    id: Option<i64>,
+    name: String,
+    device_uuid: String,
+    device_name: String,
+    firmware_version: String,
+    zkm_version: String,
+    created_at: String,
+    saved: bool,
+    supported: bool,
+    incompatibility_reason: Option<String>,
+    snapshot: Option<profiles::ProfileSnapshot>,
+    #[serde(flatten)]
+    summary: ProfileSummary,
+}
+
+fn saved_profile_view(
+    document: profiles::ProfileDocument,
+    device: Option<device::DeviceSummary>,
+) -> Result<ProfileDocumentView, String> {
+    let summary = device::build_profile_summary(document.raw_profile, device)?;
+    Ok(ProfileDocumentView {
+        id: Some(document.id),
+        name: document.name,
+        device_uuid: document.device_uuid,
+        device_name: document.device_name,
+        firmware_version: document.firmware_version,
+        zkm_version: document.zkm_version,
+        created_at: document.created_at,
+        saved: true,
+        supported: true,
+        incompatibility_reason: None,
+        snapshot: Some(document.snapshot),
         summary,
-        device_path,
-        profile,
-    } = read;
-    state.cached_profile = Some(CachedProfile {
-        device_path,
-        profile,
-    });
-    summary
+    })
 }
 
-fn require_cached_profile(
-    state: &TransactionState,
-    message: &str,
-) -> Result<CachedProfile, String> {
-    state
-        .cached_profile
-        .clone()
-        .ok_or_else(|| message.to_string())
+fn transient_profile_view(
+    summary: ProfileSummary,
+    name: &str,
+    device_uuid: String,
+    device_name: String,
+    zkm_version: String,
+) -> ProfileDocumentView {
+    ProfileDocumentView {
+        id: None,
+        name: name.to_string(),
+        device_uuid,
+        device_name,
+        firmware_version: String::new(),
+        zkm_version,
+        created_at: String::new(),
+        saved: false,
+        supported: true,
+        incompatibility_reason: None,
+        snapshot: None,
+        summary,
+    }
 }
 
 #[tauri::command]
-async fn scan_device(state: tauri::State<'_, AppState>) -> Result<Option<DeviceSummary>, String> {
+async fn scan_device(state: tauri::State<'_, AppState>) -> Result<Option<DeviceSession>, String> {
     let hid_transaction = state.hid_transaction.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _transaction = hid_transaction
@@ -62,98 +91,131 @@ async fn scan_device(state: tauri::State<'_, AppState>) -> Result<Option<DeviceS
 }
 
 #[tauri::command]
-async fn read_profile(state: tauri::State<'_, AppState>) -> Result<ProfileSummary, String> {
-    let hid_transaction = state.hid_transaction.clone();
+async fn list_profiles(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<profiles::ProfileListEntry>, String> {
+    let profile_store = state.profile_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut transaction = hid_transaction
+        let _store = profile_store
             .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let read = device::read_profile_summary()?;
-        Ok(cache_profile(&mut transaction, read))
+            .map_err(|_| "profile store lock was poisoned".to_string())?;
+        profiles::list_profiles()
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-async fn load_profile(
+async fn load_saved_profile(
     state: tauri::State<'_, AppState>,
-    profile: Vec<u8>,
-) -> Result<ProfileSummary, String> {
-    let hid_transaction = state.hid_transaction.clone();
+    id: i64,
+) -> Result<ProfileDocumentView, String> {
+    let profile_store = state.profile_store.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut transaction = hid_transaction
+        let _store = profile_store
             .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let read = device::load_profile_summary(profile)?;
-        Ok(cache_profile(&mut transaction, read))
+            .map_err(|_| "profile store lock was poisoned".to_string())?;
+        saved_profile_view(profiles::load_saved_profile(id)?, None)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn save_profile(
+    state: tauri::State<'_, AppState>,
+    input: profiles::SaveProfileInput,
+) -> Result<ProfileDocumentView, String> {
+    let profile_store = state.profile_store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = profile_store
+            .lock()
+            .map_err(|_| "profile store lock was poisoned".to_string())?;
+        saved_profile_view(profiles::save_profile(&mut store, input)?, None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn delete_profile(
+    state: tauri::State<'_, AppState>,
+    input: profiles::DeleteProfileInput,
+) -> Result<(), String> {
+    let profile_store = state.profile_store.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut store = profile_store
+            .lock()
+            .map_err(|_| "profile store lock was poisoned".to_string())?;
+        profiles::delete_profile(&mut store, input)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn read_profile(
+    state: tauri::State<'_, AppState>,
+    device_path: String,
+) -> Result<ProfileDocumentView, String> {
+    let hid_transaction = state.hid_transaction.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _transaction = hid_transaction
+            .lock()
+            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
+        let summary = device::read_profile_summary(&device_path)?;
+        Ok(transient_profile_view(
+            summary,
+            "実機から読み込んだプロファイル",
+            String::new(),
+            String::new(),
+            String::new(),
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn load_profile(profile: Vec<u8>) -> Result<ProfileDocumentView, String> {
+    let summary = device::load_profile_summary(profile)?;
+    Ok(transient_profile_view(
+        summary,
+        "インポートしたプロファイル",
+        String::new(),
+        String::new(),
+        String::new(),
+    ))
+}
+
+#[tauri::command]
+async fn update_vibration(
+    profile: Vec<u8>,
+    settings: VibrationSettingsInput,
+) -> Result<ProfileSummary, String> {
+    device::update_vibration(profile, settings)
+}
+
+#[tauri::command]
+async fn update_controller_settings(
+    profile: Vec<u8>,
+    settings: ControllerSettingsInput,
+) -> Result<ProfileSummary, String> {
+    device::update_controller_settings(profile, settings)
 }
 
 #[tauri::command]
 async fn apply_profile(
     state: tauri::State<'_, AppState>,
     profile: Vec<u8>,
-) -> Result<ProfileSummary, String> {
+    device_path: String,
+) -> Result<device::ApplyProfileResult, String> {
     let hid_transaction = state.hid_transaction.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut transaction = hid_transaction
+        let _transaction = hid_transaction
             .lock()
             .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached =
-            require_cached_profile(&transaction, "load or read a profile before applying it")?;
-        let read = device::apply_profile(profile, cached.device_path)?;
-        Ok(cache_profile(&mut transaction, read))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-async fn set_vibration(
-    state: tauri::State<'_, AppState>,
-    settings: VibrationSettingsInput,
-) -> Result<VibrationWriteResult, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached = require_cached_profile(&transaction, "read the profile before saving")?;
-        let device_path = cached.device_path.clone();
-        let (result, profile) =
-            device::set_vibration(cached.profile, cached.device_path, settings)?;
-        transaction.cached_profile = Some(CachedProfile {
-            device_path,
-            profile,
-        });
-        Ok(result)
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[tauri::command]
-async fn set_controller_settings(
-    state: tauri::State<'_, AppState>,
-    settings: ControllerSettingsInput,
-) -> Result<ControllerSettingsWriteResult, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached = require_cached_profile(&transaction, "read the profile before saving")?;
-        let device_path = cached.device_path.clone();
-        let (result, profile) =
-            device::set_controller_settings(cached.profile, cached.device_path, settings)?;
-        transaction.cached_profile = Some(CachedProfile {
-            device_path,
-            profile,
-        });
-        Ok(result)
+        device::apply_profile(profile, &device_path)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -166,18 +228,9 @@ async fn read_device_settings(
 ) -> Result<DeviceSettingsSummary, String> {
     let hid_transaction = state.hid_transaction.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let transaction = hid_transaction
+        let _transaction = hid_transaction
             .lock()
             .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached = require_cached_profile(
-            &transaction,
-            "read the profile before accessing the controller",
-        )?;
-        if cached.device_path != device_path {
-            return Err(
-                "the displayed controller changed; reload its profile before continuing".into(),
-            );
-        }
         device::read_device_settings(&device_path)
     })
     .await
@@ -189,21 +242,12 @@ async fn set_device_settings(
     state: tauri::State<'_, AppState>,
     device_path: String,
     settings: DeviceSettingsInput,
-) -> Result<DeviceSettingsWriteResult, String> {
+) -> Result<device::DeviceSettingsWriteResult, String> {
     let hid_transaction = state.hid_transaction.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let transaction = hid_transaction
+        let _transaction = hid_transaction
             .lock()
             .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached = require_cached_profile(
-            &transaction,
-            "read the profile before accessing the controller",
-        )?;
-        if cached.device_path != device_path {
-            return Err(
-                "the displayed controller changed; reload its profile before saving".into(),
-            );
-        }
         device::set_device_settings(&device_path, settings)
     })
     .await
@@ -217,18 +261,9 @@ async fn read_macros(
 ) -> Result<MacroSummary, String> {
     let hid_transaction = state.hid_transaction.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let transaction = hid_transaction
+        let _transaction = hid_transaction
             .lock()
             .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached = require_cached_profile(
-            &transaction,
-            "read the profile before accessing the controller",
-        )?;
-        if cached.device_path != device_path {
-            return Err(
-                "the displayed controller changed; reload its profile before reading macros".into(),
-            );
-        }
         device::read_macros(&device_path)
     })
     .await
@@ -244,18 +279,9 @@ async fn write_macro(
 ) -> Result<MacroWriteResult, String> {
     let hid_transaction = state.hid_transaction.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let transaction = hid_transaction
+        let _transaction = hid_transaction
             .lock()
             .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let cached = require_cached_profile(
-            &transaction,
-            "read the profile before accessing the controller",
-        )?;
-        if cached.device_path != device_path {
-            return Err(
-                "the displayed controller changed; reload its profile before writing".into(),
-            );
-        }
         device::write_macro(&device_path, slot, raw_record)
     })
     .await
@@ -279,11 +305,15 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             scan_device,
+            list_profiles,
+            load_saved_profile,
+            save_profile,
+            delete_profile,
             read_profile,
             load_profile,
+            update_vibration,
+            update_controller_settings,
             apply_profile,
-            set_vibration,
-            set_controller_settings,
             read_device_settings,
             set_device_settings,
             read_macros,

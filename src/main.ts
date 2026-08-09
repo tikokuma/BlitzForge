@@ -8,6 +8,39 @@ type DeviceSummary = {
   path: string;
 };
 
+type DeviceSession = {
+  device: DeviceSummary;
+  uuid: string;
+  zkmVersion: number;
+};
+
+type ProfileSnapshot = {
+  id: number;
+  name: string;
+  deviceUuid: string;
+  deviceName: string;
+  firmwareVersion: string;
+  zkmVersion: string;
+  configJson: string;
+  createdAt: string;
+  deleted: number;
+};
+
+type ProfileListEntry = {
+  id: number;
+  name: string;
+  deviceUuid: string;
+  deviceName: string;
+  firmwareVersion: string;
+  zkmVersion: string;
+  createdAt: string;
+  profileLength: number;
+  profileVersion: string | null;
+  supported: boolean;
+  incompatibilityReason: string | null;
+  snapshot: ProfileSnapshot;
+};
+
 type CurveSettings = {
   center: number;
   point1X: number;
@@ -47,12 +80,32 @@ type VibrationSettings = {
 type VibrationMode = "off" | "strong" | "standard" | "weak" | "custom";
 
 type ProfileSummary = {
-  device: DeviceSummary;
+  device: DeviceSummary | null;
   storedCrc: string;
   computedCrc: string;
   vibration: VibrationSettings;
   settings: ControllerSettings;
   rawProfile: number[];
+};
+
+type ProfileDocument = ProfileSummary & {
+  id: number | null;
+  name: string;
+  deviceUuid: string;
+  deviceName: string;
+  firmwareVersion: string;
+  zkmVersion: string;
+  createdAt: string;
+  saved: boolean;
+  supported: boolean;
+  incompatibilityReason: string | null;
+  snapshot: ProfileSnapshot | null;
+};
+
+type ApplyProfileResult = {
+  profile: ProfileSummary;
+  ack: string;
+  ackValue: number;
 };
 
 type ControllerSettingsInput = {
@@ -111,15 +164,6 @@ type DeviceSettingsWriteResult = {
   stepAccuracyCommand: string;
 };
 
-type VibrationWriteResult = {
-  device: DeviceSummary;
-  vibration: VibrationSettings;
-  crc: string;
-  ack: string;
-  ackValue: number;
-  rawProfile: number[];
-};
-
 const VIBRATION_PRESETS: Record<Exclude<VibrationMode, "custom">, VibrationSettings> = {
   off: {
     left: { min: 0, max: 1 },
@@ -137,15 +181,6 @@ const VIBRATION_PRESETS: Record<Exclude<VibrationMode, "custom">, VibrationSetti
     left: { min: 50, max: 100 },
     right: { min: 50, max: 100 },
   },
-};
-
-type ControllerSettingsWriteResult = {
-  device: DeviceSummary;
-  settings: ControllerSettings;
-  crc: string;
-  ack: string;
-  ackValue: number;
-  rawProfile: number[];
 };
 
 const curveRangeIds = [
@@ -309,8 +344,9 @@ const byId = <T extends Element = HTMLElement>(id: string): T => {
 };
 
 let busy = false;
-let deviceConnected = false;
-let currentProfile: ProfileSummary | null = null;
+let deviceSession: DeviceSession | null = null;
+let profileList: ProfileListEntry[] = [];
+let currentProfile: ProfileDocument | null = null;
 let settingsDirty = false;
 let vibrationDirty = false;
 let deviceSettingsDirty = false;
@@ -352,17 +388,17 @@ function setBusy(value: boolean, message?: string) {
 }
 
 function syncActions() {
-  byId<HTMLButtonElement>("open-settings").disabled = busy || !deviceConnected;
-  byId<HTMLButtonElement>("import-profile").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("refresh-device").disabled = busy;
+  byId<HTMLButtonElement>("import-profile").disabled = busy;
+  byId<HTMLButtonElement>("read-device-profile").disabled = busy || !deviceSession;
   byId<HTMLButtonElement>("export-profile").disabled = busy || !currentProfile;
-  byId<HTMLButtonElement>("apply-profile").disabled = busy || !currentProfile || settingsDirty || vibrationDirty;
-  byId<HTMLButtonElement>("save-settings").disabled = busy || !currentProfile || !settingsDirty;
-  byId<HTMLButtonElement>("save-vibration").disabled = busy || !currentProfile || !vibrationDirty;
-  byId<HTMLButtonElement>("refresh-device-settings").disabled = busy || !currentProfile;
-  byId<HTMLButtonElement>("save-device-settings").disabled = busy || !currentProfile || !deviceSettingsDirty;
-  byId<HTMLButtonElement>("refresh-macros").disabled = busy || !deviceConnected || !currentProfile;
+  byId<HTMLButtonElement>("apply-profile").disabled = busy || !currentProfile || !currentProfile.saved || !currentProfile.supported || settingsDirty || vibrationDirty;
+  byId<HTMLButtonElement>("save-profile").disabled = busy || !currentProfile || (currentProfile.saved && !settingsDirty && !vibrationDirty);
+  byId<HTMLButtonElement>("refresh-device-settings").disabled = busy || !deviceSession;
+  byId<HTMLButtonElement>("save-device-settings").disabled = busy || !deviceSession || !deviceSettingsDirty;
+  byId<HTMLButtonElement>("refresh-macros").disabled = busy || !deviceSession;
   byId<HTMLButtonElement>("add-macro-step").disabled = busy || !macroDraftRecord || (macroDraftRecord.length - 10) / 10 >= MACRO_MAX_STEPS;
-  byId<HTMLButtonElement>("write-macro").disabled = busy || !currentProfile || !macroDraftRecord;
+  byId<HTMLButtonElement>("write-macro").disabled = busy || !deviceSession || !macroDraftRecord;
 }
 
 function renderDetails(id: string, rows: Array<[string, string]>) {
@@ -377,27 +413,29 @@ function renderDetails(id: string, rows: Array<[string, string]>) {
   }
 }
 
-function renderDevice(device: DeviceSummary | null) {
+function renderDevice(session: DeviceSession | null) {
   const name = byId("device-name");
-  if (!device) {
+  if (!session) {
     name.textContent = "接続を確認しています";
     renderDetails("device-details", []);
     return;
   }
-  name.textContent = device.product;
+  name.textContent = session.device.product;
   renderDetails("device-details", [
-    ["Device", device.vendorProduct],
-    ["Usage", device.usage],
-    ["Path", device.path],
+    ["Device", session.device.vendorProduct],
+    ["Usage", session.device.usage],
+    ["Path", session.device.path],
+    ["UUID", session.uuid || "不明"],
+    ["ZKM", session.zkmVersion ? `0x${session.zkmVersion.toString(16).toUpperCase()}` : "不明"],
   ]);
 }
 
-function setConnection(device: DeviceSummary | null) {
+function setConnection(session: DeviceSession | null) {
   const connection = byId("connection");
-  deviceConnected = device !== null;
-  renderDevice(device);
+  deviceSession = session;
+  renderDevice(session);
 
-  if (!device) {
+  if (!session) {
     connection.textContent = "未接続";
     connection.className = "badge offline";
     return;
@@ -414,6 +452,7 @@ function clearProfile() {
   deviceSettingsDirty = false;
   currentDeviceSettings = null;
   byId("settings-profile-status").textContent = "";
+  byId("settings-profile-name").textContent = "";
   renderDetails("profile-details", []);
   byId("profile-hint").textContent = "まだプロファイルを読み込んでいません。";
   byId("curve-dirty").hidden = true;
@@ -422,11 +461,12 @@ function clearProfile() {
   syncActions();
 }
 
-function renderProfile(profile: ProfileSummary) {
+function renderProfile(profile: ProfileDocument) {
   const crcState = profile.storedCrc === profile.computedCrc ? "一致" : "不一致";
-  byId("settings-profile-status").textContent = crcState === "一致"
-    ? "プロファイル読み込み済み"
-    : "プロファイルを確認してください";
+  byId("settings-profile-name").textContent = profile.name;
+  byId("settings-profile-status").textContent = profile.saved
+    ? (crcState === "一致" ? "保存済み" : "CRC不一致")
+    : "未保存の編集";
   const rapid = profile.settings.rapidFire;
   const rapidButtons = KEYMAP_VISIBLE_SOURCES
     .filter(({ slot }) => rapid.keys[slot] === true)
@@ -447,7 +487,9 @@ function renderProfile(profile: ProfileSummary) {
     ["キーバインド", changedKeymaps === 0 ? "標準" : `${changedKeymaps}件変更`],
     ["連射", `${rapidState} / ${timing}`],
   ]);
-  byId("profile-hint").textContent = "読み込み済みです。設定を開いて編集できます。";
+  byId("profile-hint").textContent = profile.saved
+    ? "保存済みプロファイルです。カードの「開く」から編集できます。"
+    : "未保存のプロファイルです。設定画面上部から共有DBへ保存してください。";
 }
 
 function setRangeControl(id: string, value: number) {
@@ -1127,11 +1169,11 @@ function renderMacroSummary(summary: MacroSummary) {
 }
 
 async function refreshMacros() {
-  const profile = currentProfile;
-  if (!deviceConnected || !profile) return;
+  const path = deviceSession?.device.path;
+  if (!path) return;
   setBusy(true, "マクロの4枠を読み込んでいます…");
   try {
-    renderMacroSummary(await invoke<MacroSummary>("read_macros", { devicePath: profile.device.path }));
+    renderMacroSummary(await invoke<MacroSummary>("read_macros", { devicePath: path }));
     setMessage("マクロ4枠を読み込みました。");
   } catch (error) {
     byId("macro-output").textContent = errorMessage(error);
@@ -1142,8 +1184,8 @@ async function refreshMacros() {
 }
 
 async function writeMacro() {
-  const profile = currentProfile;
-  if (!deviceConnected || !profile) return;
+  const path = deviceSession?.device.path;
+  if (!path) return;
   try {
     const slot = Number(byId<HTMLSelectElement>("macro-slot").value);
     if (!macroDraftRecord) {
@@ -1154,7 +1196,7 @@ async function writeMacro() {
     macroDraftRecord = record;
     setBusy(true, `マクロ スロット${slot + 1}を保存し、実機で読み返しています…`);
     const result = await invoke<MacroWriteResult>("write_macro", {
-      devicePath: profile.device.path,
+      devicePath: path,
       slot,
       rawRecord: record,
     });
@@ -1592,6 +1634,7 @@ function markSettingsDirty() {
 function markVibrationDirty() {
   vibrationDirty = currentProfile !== null
     && !vibrationEqual(readVibrationSettings(), currentProfile.vibration);
+  byId("settings-dirty").hidden = !settingsDirty && !vibrationDirty;
   syncActions();
 }
 
@@ -1599,7 +1642,7 @@ function showView(view: "home" | "settings") {
   const settingsVisible = view === "settings";
   byId("home-view").hidden = settingsVisible;
   byId("settings-view").hidden = !settingsVisible;
-  byId("message").hidden = !settingsVisible;
+  byId("message").hidden = false;
   if (settingsVisible && currentProfile) {
     selectSettingsTab("stick");
   }
@@ -1619,50 +1662,235 @@ function selectSettingsTab(tab: "stick" | "keymap" | "device" | "vibration" | "m
   byId("tab-macro").classList.toggle("active", tab === "macro");
 }
 
-async function scan() {
-  setBusy(true, "コントローラーを検索しています…");
+function normalizedUuid(value: string): string {
+  return value.replace(/[^0-9a-f]/gi, "").toUpperCase();
+}
+
+function profileMatchesDevice(profile: { deviceUuid: string }): boolean {
+  const profileUuid = normalizedUuid(profile.deviceUuid);
+  const connectedUuid = normalizedUuid(deviceSession?.uuid ?? "");
+  return Boolean(profileUuid && connectedUuid && profileUuid === connectedUuid);
+}
+
+function renderProfileLibrary() {
+  const container = byId("profile-library");
+  container.replaceChildren();
+  if (profileList.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-hint";
+    empty.textContent = "共有プロファイルはまだありません。ファイルまたは実機から追加してください。";
+    container.append(empty);
+    return;
+  }
+
+  const sorted = [...profileList].sort((left, right) => {
+    const leftMatch = profileMatchesDevice(left) ? 1 : 0;
+    const rightMatch = profileMatchesDevice(right) ? 1 : 0;
+    if (leftMatch !== rightMatch) return rightMatch - leftMatch;
+    return right.id - left.id;
+  });
+  for (const entry of sorted) {
+    const card = document.createElement("article");
+    card.className = "profile-card";
+    card.classList.toggle("profile-card-matched", profileMatchesDevice(entry));
+    const heading = document.createElement("div");
+    heading.className = "profile-card-heading";
+    const title = document.createElement("h3");
+    title.textContent = entry.name || `Profile ${entry.id}`;
+    const state = document.createElement("span");
+    state.className = `status-pill ${entry.supported ? "profile-compatible" : "profile-incompatible"}`;
+    state.textContent = entry.supported ? (profileMatchesDevice(entry) ? "接続中UUID" : "互換") : "非対応";
+    heading.append(title, state);
+    const details = document.createElement("p");
+    details.className = "profile-card-details";
+    details.textContent = [
+      entry.deviceName || "機種情報なし",
+      entry.deviceUuid ? `UUID ${entry.deviceUuid}` : "UUIDなし",
+      entry.profileVersion ?? "バージョン不明",
+      `${entry.profileLength} bytes`,
+      entry.createdAt || "日時不明",
+    ].join(" · ");
+    const actions = document.createElement("div");
+    actions.className = "button-row profile-card-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "開く";
+    open.disabled = !entry.supported;
+    open.addEventListener("click", () => void openSavedProfile(entry.id));
+    const duplicate = document.createElement("button");
+    duplicate.type = "button";
+    duplicate.textContent = "複製";
+    duplicate.disabled = !entry.supported;
+    duplicate.addEventListener("click", () => void duplicateProfile(entry));
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.textContent = "名前変更";
+    rename.addEventListener("click", () => void renameProfile(entry));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "削除";
+    remove.addEventListener("click", () => void deleteProfile(entry));
+    actions.append(open, duplicate, rename, remove);
+    card.append(heading, details, actions);
+    container.append(card);
+  }
+}
+
+function setCurrentProfile(profile: ProfileDocument) {
+  currentProfile = profile;
+  settingsDirty = false;
+  vibrationDirty = false;
+  deviceSettingsDirty = false;
+  currentDeviceSettings = null;
+  renderProfile(profile);
+  renderSettings(profile);
+  syncActions();
+}
+
+async function refreshProfiles() {
+  profileList = await invoke<ProfileListEntry[]>("list_profiles");
+  renderProfileLibrary();
+}
+
+async function openSavedProfile(id: number) {
+  setBusy(true, "プロファイルを読み込んでいます…");
   try {
-    const device = await invoke<DeviceSummary | null>("scan_device");
-    setConnection(device);
-    clearProfile();
-    if (!device) {
-      showView("home");
-      setMessage("コントローラーを接続して再検索してください。");
-    } else {
-      await readProfile(false);
-    }
+    setCurrentProfile(await invoke<ProfileDocument>("load_saved_profile", { id }));
+    showView("settings");
+    setMessage("プロファイルを開きました。コントローラー未接続でも編集できます。");
   } catch (error) {
-    setConnection(null);
-    clearProfile();
+    setMessage(errorMessage(error));
+    await refreshProfiles().catch(() => undefined);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function duplicateProfile(entry: ProfileListEntry) {
+  const name = window.prompt("複製後のプロファイル名", `${entry.name} コピー`);
+  if (name === null) return;
+  setBusy(true, "プロファイルを複製しています…");
+  try {
+    const source = await invoke<ProfileDocument>("load_saved_profile", { id: entry.id });
+    const saved = await invoke<ProfileDocument>("save_profile", {
+      input: {
+        id: null,
+        name,
+        rawProfile: source.rawProfile,
+        deviceUuid: source.deviceUuid,
+        deviceName: source.deviceName,
+        firmwareVersion: source.firmwareVersion,
+        zkmVersion: source.zkmVersion,
+        snapshot: null,
+      },
+    });
+    setCurrentProfile(saved);
+    await refreshProfiles();
+    showView("settings");
+    setMessage("プロファイルを複製しました。");
+  } catch (error) {
     setMessage(errorMessage(error));
   } finally {
     setBusy(false);
   }
 }
 
-async function readProfile(openSettings = false) {
-  if (!deviceConnected) return;
-  setBusy(true, "プロファイルを読み取っています…");
+async function renameProfile(entry: ProfileListEntry) {
+  const name = window.prompt("新しいプロファイル名", entry.name);
+  if (name === null || name.trim() === entry.name) return;
+  setBusy(true, "プロファイル名を変更しています…");
   try {
-    const profile = await invoke<ProfileSummary>("read_profile");
-    currentProfile = profile;
-    renderProfile(profile);
-    renderSettings(profile);
-    try {
-      applyDeviceSettings(await fetchDeviceSettings(profile.device.path));
-      setMessage(profile.storedCrc === profile.computedCrc
-        ? "プロファイルを読み込みました。"
-        : "プロファイルを読み込みましたが、内容を確認できません。保存はできません。");
-    } catch (error) {
-      setMessage(`プロファイルは読み取りましたが、デバイス設定の読み取りに失敗しました: ${errorMessage(error)}`);
-    }
-    if (openSettings) {
-      showView("settings");
-    }
+    const source = await invoke<ProfileDocument>("load_saved_profile", { id: entry.id });
+    const saved = await invoke<ProfileDocument>("save_profile", {
+      input: {
+        id: source.id,
+        name,
+        rawProfile: source.rawProfile,
+        deviceUuid: source.deviceUuid,
+        deviceName: source.deviceName,
+        firmwareVersion: source.firmwareVersion,
+        zkmVersion: source.zkmVersion,
+        snapshot: source.snapshot,
+      },
+    });
+    if (currentProfile?.id === saved.id) setCurrentProfile(saved);
+    await refreshProfiles();
+    setMessage("プロファイル名を変更しました。");
   } catch (error) {
-    if (openSettings) {
-      byId("message").hidden = false;
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function deleteProfile(entry: ProfileListEntry) {
+  if (!window.confirm(`「${entry.name}」を削除しますか？`)) return;
+  setBusy(true, "プロファイルを削除しています…");
+  try {
+    await invoke("delete_profile", { input: { id: entry.id, snapshot: entry.snapshot } });
+    if (currentProfile?.id === entry.id) {
+      clearProfile();
+      showView("home");
     }
+    await refreshProfiles();
+    setMessage("プロファイルを削除しました。");
+  } catch (error) {
+    const message = errorMessage(error);
+    if (message.startsWith("PROFILE_CONFLICT:")) {
+      setMessage("公式アプリ側で変更されています。再読込してから削除してください。");
+      await refreshProfiles().catch(() => undefined);
+    } else {
+      setMessage(message);
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function scan() {
+  setBusy(true, "コントローラーと共有プロファイルを確認しています…");
+  try {
+    setConnection(await invoke<DeviceSession | null>("scan_device"));
+    clearProfile();
+  } catch (error) {
+    setConnection(null);
+    clearProfile();
+    showView("home");
+    setMessage(errorMessage(error));
+    setBusy(false);
+    return;
+  }
+  try {
+    await refreshProfiles();
+    showView("home");
+    setMessage(deviceSession
+      ? "接続を確認しました。プロファイルを選択してください。"
+      : "コントローラー未接続です。保存済みプロファイルは編集できます。");
+  } catch (error) {
+    showView("home");
+    setMessage(`プロファイル一覧を読み込めませんでした: ${errorMessage(error)}`);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function readProfileFromDevice() {
+  const session = deviceSession;
+  if (!session) return;
+  setBusy(true, "実機プロファイルを読み取っています…");
+  try {
+    const profile = await invoke<ProfileDocument>("read_profile", { devicePath: session.device.path });
+    setCurrentProfile({
+      ...profile,
+      name: "実機から読み込んだプロファイル",
+      deviceUuid: session.uuid,
+      deviceName: session.device.product,
+      zkmVersion: session.zkmVersion ? String(session.zkmVersion) : "",
+    });
+    showView("settings");
+    setMessage("実機から読み込みました。保存するまでConfig.dbも実機も変更していません。");
+  } catch (error) {
     setMessage(errorMessage(error));
   } finally {
     setBusy(false);
@@ -1670,16 +1898,12 @@ async function readProfile(openSettings = false) {
 }
 
 async function importProfileFile(file: File) {
-  if (!deviceConnected) return;
   setBusy(true, "プロファイルを確認しています…");
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const profile = await invoke<ProfileSummary>("load_profile", { profile: Array.from(bytes) });
-    currentProfile = profile;
-    renderProfile(profile);
-    renderSettings(profile);
+    setCurrentProfile(await invoke<ProfileDocument>("load_profile", { profile: Array.from(bytes) }));
     showView("settings");
-    setMessage("プロファイルを読み込みました。実機へ適用できます。");
+    setMessage("プロファイルを読み込みました。保存するまで共有DBは変更していません。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1696,7 +1920,7 @@ async function exportProfile() {
   setBusy(true, "保存先を選択してください…");
   try {
     const path = await save({
-      defaultPath: "bigbigwon-profile.bin",
+      defaultPath: `${currentProfile.name || "bigbigwon-profile"}.bin`,
       filters: [{ name: "BIGBIGWONプロファイル", extensions: ["bin"] }],
     });
     if (!path) return;
@@ -1710,15 +1934,20 @@ async function exportProfile() {
 }
 
 async function applyProfile() {
-  if (!currentProfile || settingsDirty || vibrationDirty) return;
   const profile = currentProfile;
-  setBusy(true, "プロファイル全体をコントローラーへ適用しています…");
+  const session = deviceSession;
+  if (!profile || !profile.saved || !profile.id || settingsDirty || vibrationDirty || !session) return;
+  if (!profileMatchesDevice(profile)) {
+    setMessage("選択したプロファイルのUUIDと接続中コントローラーが一致しません。");
+    return;
+  }
+  setBusy(true, "保存済みプロファイルをコントローラーへ適用しています…");
   try {
-    const result = await invoke<ProfileSummary>("apply_profile", { profile: profile.rawProfile });
-    currentProfile = result;
-    renderProfile(result);
-    renderSettings(result);
-    setMessage("プロファイルを実機へ適用しました。");
+    const result = await invoke<ApplyProfileResult>("apply_profile", {
+      profile: profile.rawProfile,
+      devicePath: session.device.path,
+    });
+    setMessage(`プロファイルを実機へ適用しました。D7 ACK: ${result.ack}。自動D6再読込は行っていません。`);
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1740,11 +1969,11 @@ async function fetchDeviceSettings(devicePath: string): Promise<DeviceSettings> 
 }
 
 async function refreshDeviceSettings() {
-  const profile = currentProfile;
-  if (!profile || !deviceConnected || busy) return;
+  const path = deviceSession?.device.path;
+  if (!path || busy) return;
   setBusy(true, "デバイス設定を読み込んでいます…");
   try {
-    applyDeviceSettings(await fetchDeviceSettings(profile.device.path));
+    applyDeviceSettings(await fetchDeviceSettings(path));
     setMessage("デバイス設定を読み込みました。");
   } catch (error) {
     setMessage(errorMessage(error));
@@ -1753,66 +1982,93 @@ async function refreshDeviceSettings() {
   }
 }
 
-async function saveSettings() {
+async function saveProfileDocument() {
   const profile = currentProfile;
-  if (!profile || !settingsDirty) return;
-  const settings = readSettingsInput();
-  setBusy(true, "コントローラー設定を保存しています…");
+  if (!profile || (profile.saved && !settingsDirty && !vibrationDirty)) return;
+  const session = deviceSession;
+  let pendingRawProfile = profile.rawProfile;
+  setBusy(true, "プロファイルを共有DBへ保存しています…");
   try {
-    const result = await invoke<ControllerSettingsWriteResult>("set_controller_settings", { settings });
-    currentProfile = {
-      ...profile,
-      device: result.device,
-      storedCrc: result.crc,
-      computedCrc: result.crc,
-      settings: result.settings,
-      rawProfile: result.rawProfile,
+    if (settingsDirty) {
+      const updated = await invoke<ProfileSummary>("update_controller_settings", {
+        profile: pendingRawProfile,
+        settings: readSettingsInput(),
+      });
+      pendingRawProfile = updated.rawProfile;
+    }
+    if (vibrationDirty) {
+      const updated = await invoke<ProfileSummary>("update_vibration", {
+        profile: pendingRawProfile,
+        settings: readVibrationSettings(),
+      });
+      pendingRawProfile = updated.rawProfile;
+    }
+    let name = profile.name;
+    if (profile.id === null) {
+      const prompted = window.prompt("保存するプロファイル名", name);
+      if (prompted === null) return;
+      name = prompted;
+    }
+    const input = {
+      id: profile.id,
+      name,
+      rawProfile: pendingRawProfile,
+      deviceUuid: profile.deviceUuid || session?.uuid || "",
+      deviceName: profile.deviceName || session?.device.product || "",
+      firmwareVersion: profile.firmwareVersion,
+      zkmVersion: profile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
+      snapshot: profile.snapshot,
     };
-    renderProfile(currentProfile);
-    renderControllerSettings(currentProfile);
-    syncActions();
-    setMessage("コントローラー設定を保存しました。");
+    const saved = await invoke<ProfileDocument>("save_profile", { input });
+    setCurrentProfile(saved);
+    await refreshProfiles();
+    setMessage("プロファイルをConfig.dbへ保存しました。実機へは送信していません。");
   } catch (error) {
-    setMessage(errorMessage(error));
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function saveVibration() {
-  const profile = currentProfile;
-  if (!profile || !vibrationDirty) return;
-  const vibration = readVibrationSettings();
-  setBusy(true, "振動設定を保存しています…");
-  try {
-    const result = await invoke<VibrationWriteResult>("set_vibration", { settings: vibration });
-    currentProfile = {
-      ...profile,
-      device: result.device,
-      vibration: result.vibration,
-      storedCrc: result.crc,
-      computedCrc: result.crc,
-      rawProfile: result.rawProfile,
-    };
-    renderProfile(currentProfile);
-    renderVibrationSettings(currentProfile);
-    syncActions();
-    setMessage("バイブレーションを保存しました。");
-  } catch (error) {
-    setMessage(errorMessage(error));
+    const message = errorMessage(error);
+    if (message.startsWith("PROFILE_CONFLICT:") && profile.id !== null) {
+      const reload = window.confirm("公式アプリ側で変更されています。OKで再読込、キャンセルで別名保存します。");
+      if (reload) {
+        await openSavedProfile(profile.id);
+      } else {
+        const copyName = window.prompt("別名で保存する名前", `${profile.name} コピー`);
+        if (copyName) {
+          try {
+            const saved = await invoke<ProfileDocument>("save_profile", {
+              input: {
+                id: null,
+                name: copyName,
+                rawProfile: pendingRawProfile,
+                deviceUuid: profile.deviceUuid || session?.uuid || "",
+                deviceName: profile.deviceName || session?.device.product || "",
+                firmwareVersion: profile.firmwareVersion,
+                zkmVersion: profile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
+                snapshot: null,
+              },
+            });
+            setCurrentProfile(saved);
+            await refreshProfiles();
+            setMessage("外部変更を上書きせず、別名で保存しました。");
+          } catch (copyError) {
+            setMessage(errorMessage(copyError));
+          }
+        }
+      }
+    } else {
+      setMessage(message);
+    }
   } finally {
     setBusy(false);
   }
 }
 
 async function saveDeviceSettings() {
-  const profile = currentProfile;
-  if (!profile || !deviceSettingsDirty) return;
+  const path = deviceSession?.device.path;
+  if (!path || !deviceSettingsDirty) return;
   const settings = readDeviceSettings();
   setBusy(true, "ポーリングレートとステップ精度を保存しています…");
   try {
     const result = await invoke<DeviceSettingsWriteResult>("set_device_settings", {
-      devicePath: profile.device.path,
+      devicePath: path,
       settings,
     });
     currentDeviceSettings = cloneDeviceSettings(result.settings);
@@ -1829,13 +2085,8 @@ async function saveDeviceSettings() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  byId("open-settings").addEventListener("click", () => {
-    if (currentProfile) {
-      showView("settings");
-    } else {
-      void readProfile(true);
-    }
-  });
+  byId("refresh-device").addEventListener("click", () => void scan());
+  byId("read-device-profile").addEventListener("click", () => void readProfileFromDevice());
   byId("import-profile").addEventListener("click", () => byId<HTMLInputElement>("profile-file").click());
   byId<HTMLInputElement>("profile-file").addEventListener("change", (event) => {
     const file = (event.target as HTMLInputElement).files?.[0];
@@ -1843,9 +2094,11 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   byId("export-profile").addEventListener("click", () => void exportProfile());
   byId("apply-profile").addEventListener("click", () => void applyProfile());
-  byId("back-home").addEventListener("click", () => showView("home"));
-  byId("save-settings").addEventListener("click", () => void saveSettings());
-  byId("save-vibration").addEventListener("click", () => void saveVibration());
+  byId("back-home").addEventListener("click", () => {
+    showView("home");
+    void refreshProfiles().catch((error) => setMessage(errorMessage(error)));
+  });
+  byId("save-profile").addEventListener("click", () => void saveProfileDocument());
   byId("save-device-settings").addEventListener("click", () => void saveDeviceSettings());
   byId("refresh-device-settings").addEventListener("click", () => void refreshDeviceSettings());
   byId("refresh-macros").addEventListener("click", () => void refreshMacros());
@@ -1947,4 +2200,8 @@ window.addEventListener("DOMContentLoaded", () => {
   selectSettingsTab("stick");
   syncActions();
   void scan();
+});
+
+window.addEventListener("focus", () => {
+  if (!busy) void refreshProfiles().catch((error) => setMessage(errorMessage(error)));
 });

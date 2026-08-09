@@ -28,6 +28,8 @@ const GET_PROFILE_SIZE: [u8; 4] = [0xa5, 0x04, 0xd3, 0x7c];
 const GET_POLLING_RATE: [u8; 4] = [0xa5, 0x04, 0xf6, 0x9f];
 const GET_STEP_ACCURACY: [u8; 4] = [0xa5, 0x04, 0xf7, 0xa0];
 const GET_MACRO_LIST: [u8; 4] = [0xa5, 0x04, 0xd5, 0x7e];
+const GET_DEVICE_UUID: [u8; 12] = [0xa5, 0x0c, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0xa0];
+const GET_ZKM_VERSION: [u8; 4] = [0xa5, 0x04, 0x0b, 0xb4];
 
 pub struct ReadFragment {
     pub sequence: u8,
@@ -107,6 +109,37 @@ pub fn get_step_accuracy_report() -> Vec<u8> {
 
 pub fn get_macro_list_report() -> Vec<u8> {
     command_report(&GET_MACRO_LIST)
+}
+
+pub fn get_device_uuid_report() -> Vec<u8> {
+    command_report(&GET_DEVICE_UUID)
+}
+
+pub fn get_zkm_version_report() -> Vec<u8> {
+    command_report(&GET_ZKM_VERSION)
+}
+
+pub fn decode_device_uuid(report: &[u8]) -> Result<String, String> {
+    let wire = wire_bytes(report);
+    if wire.len() < 12 || wire[0] != 0xa5 || wire[1] != 12 || wire[2] != 0xef {
+        return Err("unexpected device UUID response".into());
+    }
+    if byte_sum(&wire[..11]) != wire[11] {
+        return Err("invalid device UUID checksum".into());
+    }
+    Ok(wire[3..11]
+        .iter()
+        .map(|value| format!("{value:02X}"))
+        .collect())
+}
+
+pub fn decode_zkm_version(report: &[u8]) -> Result<u8, String> {
+    let payload = short_command_payload(report, 0x0b)?;
+    let version = payload
+        .first()
+        .copied()
+        .ok_or_else(|| "ZKM version response has no value".to_string())?;
+    Ok(if version == b'8' { b'6' } else { version })
 }
 
 pub fn get_macro_info_report(slot: u8) -> Result<Vec<u8>, String> {
@@ -921,6 +954,20 @@ mod tests {
                 0, 0xa5, 0x0a, 0xd3, 0x34, 0x0c, 0xe4, 0x01, 0x94, 0x02, 0x3d
             ]),
             Ok(V37_PROFILE_LENGTH)
+        );
+    }
+
+    #[test]
+    fn decodes_observed_device_identity() {
+        assert_eq!(
+            decode_device_uuid(&[
+                0, 0xa5, 0x0c, 0xef, 0x55, 0xe8, 0x22, 0x4a, 0x7a, 0x68, 0x00, 0x00, 0x2b
+            ]),
+            Ok("55E8224A7A680000".into())
+        );
+        assert_eq!(
+            decode_zkm_version(&[0, 0xa5, 0x05, 0x0b, 0x37, 0xec]),
+            Ok(0x37)
         );
     }
 

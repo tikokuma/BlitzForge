@@ -25,6 +25,7 @@
               <h2>コントローラー</h2>
               <p id="device-name">接続を確認しています</p>
             </div>
+            <button id="refresh-device" type="button">再検索</button>
           </div>
           <dl id="device-details" class="details"></dl>
         </section>
@@ -32,12 +33,19 @@
         <section class="panel profile-panel">
           <div class="panel-heading">
             <div>
-              <p class="section-kicker">PROFILE</p>
-              <h2>ベースプロファイル</h2>
-              <p>接続中のコントローラー設定を読み込みます。</p>
+              <p class="section-kicker">PROFILE LIBRARY</p>
+              <h2>共有プロファイル</h2>
+              <p>公式アプリと同じ Config.db を使用します。</p>
             </div>
-            <button id="open-settings" class="accent" disabled>設定を開く</button>
+            <div class="button-row">
+              <button id="import-profile" type="button">ファイルから追加</button>
+              <button id="read-device-profile" class="accent" type="button" disabled>実機から新規作成</button>
+              <button id="export-profile" type="button" disabled>書き出す</button>
+              <button id="apply-profile" class="primary" type="button" disabled>実機へ適用</button>
+              <input id="profile-file" type="file" accept=".bin,.dat" hidden />
+            </div>
           </div>
+          <div id="profile-library" class="profile-library"></div>
           <dl id="profile-details" class="details"></dl>
           <p id="profile-hint" class="empty-hint">まだプロファイルを読み込んでいません。</p>
         </section>
@@ -46,9 +54,10 @@
       <div id="settings-view" class="view" hidden>
         <div class="settings-toolbar">
           <button id="back-home" class="back-button">← 概要へ戻る</button>
+          <strong id="settings-profile-name"></strong>
           <span id="settings-profile-status" class="status-pill"></span>
           <span id="settings-dirty" class="status-pill" hidden>未保存</span>
-          <button id="save-settings" class="primary" data-operation disabled>設定を保存</button>
+          <button id="save-profile" class="primary" data-operation disabled>プロファイルを保存</button>
         </div>
 
         <nav class="settings-tabs" aria-label="設定カテゴリ">
@@ -275,18 +284,6 @@
               <button id="save-device-settings" class="primary" data-operation disabled>デバイス設定を保存</button>
             </div>
           </div>
-          <div class="profile-tools">
-            <div class="group-heading">
-              <h3>プロファイル</h3>
-              <p>ファイルから読み込み、保存、実機への適用を行います。</p>
-            </div>
-            <div class="button-row">
-              <button id="import-profile" type="button" data-operation>ファイルを読み込む</button>
-              <button id="export-profile" type="button" disabled>ファイルを書き出す</button>
-              <button id="apply-profile" type="button" class="primary" data-operation disabled>実機へ適用</button>
-              <input id="profile-file" type="file" accept=".bin,.dat" hidden />
-            </div>
-          </div>
           <div class="device-settings-grid">
             <div class="range-field">
               <div class="range-label"><label for="polling-rate">ポーリングレート</label></div>
@@ -321,7 +318,7 @@
               <p class="section-kicker">VIBRATION</p>
               <h2>バイブレーションレベル</h2>
             </div>
-            <button id="save-vibration" class="primary" data-operation disabled>振動を保存</button>
+            <span class="status-pill">上部の「プロファイルを保存」で保存</span>
           </div>
           <div class="vibration-mode-field range-field">
             <div class="range-label"><label for="vibration-mode">振動モード</label></div>

@@ -11,38 +11,37 @@ const ACK_TIMEOUT_MS: i32 = 2_000;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSummary {
-    vendor_product: String,
-    usage: String,
-    product: String,
-    path: String,
+    pub vendor_product: String,
+    pub usage: String,
+    pub product: String,
+    pub path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceSession {
+    pub device: DeviceSummary,
+    pub uuid: String,
+    pub zkm_version: u8,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSummary {
-    device: DeviceSummary,
-    stored_crc: String,
-    computed_crc: String,
-    vibration: VibrationSettingsSummary,
-    settings: ControllerSettingsSummary,
-    raw_profile: Vec<u8>,
-}
-
-pub struct ProfileRead {
-    pub summary: ProfileSummary,
-    pub device_path: String,
-    pub profile: Vec<u8>,
+    pub device: Option<DeviceSummary>,
+    pub stored_crc: String,
+    pub computed_crc: String,
+    pub vibration: VibrationSettingsSummary,
+    pub settings: ControllerSettingsSummary,
+    pub raw_profile: Vec<u8>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VibrationWriteResult {
-    device: DeviceSummary,
-    vibration: VibrationSettingsSummary,
-    crc: String,
-    ack: String,
-    ack_value: u8,
-    raw_profile: Vec<u8>,
+pub struct ApplyProfileResult {
+    pub profile: ProfileSummary,
+    pub ack: String,
+    pub ack_value: u8,
 }
 
 #[derive(Clone, Serialize)]
@@ -142,17 +141,6 @@ pub struct CurveSettingsInput {
     stabilization: i16,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ControllerSettingsWriteResult {
-    device: DeviceSummary,
-    settings: ControllerSettingsSummary,
-    crc: String,
-    ack: String,
-    ack_value: u8,
-    raw_profile: Vec<u8>,
-}
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepAccuracySummary {
@@ -225,90 +213,81 @@ pub struct MacroWriteResult {
     ack_value: u8,
 }
 
-pub fn scan_device() -> Result<Option<DeviceSummary>, String> {
+pub fn scan_device() -> Result<Option<DeviceSession>, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    Ok(find_config_info(&api).map(summary))
+    let Some(info) = find_config_info(&api) else {
+        return Ok(None);
+    };
+    let device_summary = summary(info);
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    let uuid = transact_short(&device, &protocol::get_device_uuid_report(), 0xef)
+        .and_then(|response| protocol::decode_device_uuid(&response))
+        .unwrap_or_default();
+    let zkm_version = transact_short(&device, &protocol::get_zkm_version_report(), 0x0b)
+        .and_then(|response| protocol::decode_zkm_version(&response))
+        .unwrap_or_default();
+    Ok(Some(DeviceSession {
+        device: device_summary,
+        uuid,
+        zkm_version,
+    }))
 }
 
-pub fn read_profile_summary() -> Result<ProfileRead, String> {
-    let (device, profile) = read_profile()?;
-    build_profile_read(device, profile)
+pub fn read_profile_summary(expected_device_path: &str) -> Result<ProfileSummary, String> {
+    let (device, profile) = read_profile(expected_device_path)?;
+    build_profile_summary(profile, Some(device))
 }
 
-pub fn load_profile_summary(input: Vec<u8>) -> Result<ProfileRead, String> {
+pub fn load_profile_summary(input: Vec<u8>) -> Result<ProfileSummary, String> {
     let profile = protocol::normalize_v37_profile(&input)?;
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
-    build_profile_read(summary(info), profile)
+    build_profile_summary(profile, None)
 }
 
-pub fn apply_profile(input: Vec<u8>, device_path: String) -> Result<ProfileRead, String> {
+pub fn apply_profile(input: Vec<u8>, device_path: &str) -> Result<ApplyProfileResult, String> {
     let profile = protocol::normalize_v37_profile(&input)?;
-    let (device, _, _) = write_profile(&profile, &device_path)?;
-    build_profile_read(device, profile)
+    let (device, ack, ack_value) = write_profile(&profile, device_path)?;
+    Ok(ApplyProfileResult {
+        profile: build_profile_summary(profile, Some(device))?,
+        ack: spaced_hex(&ack),
+        ack_value,
+    })
 }
 
-fn build_profile_read(device: DeviceSummary, profile: Vec<u8>) -> Result<ProfileRead, String> {
+pub fn build_profile_summary(
+    profile: Vec<u8>,
+    device: Option<DeviceSummary>,
+) -> Result<ProfileSummary, String> {
     let stored_crc = protocol::stored_profile_crc(&profile)?;
     let computed_crc = protocol::profile_crc(&profile)?;
     let vibration = protocol::vibration_settings(&profile)?;
     let settings = settings_summary(&profile)?;
-    let device_path = device.path.clone();
-    Ok(ProfileRead {
-        summary: ProfileSummary {
-            device,
-            stored_crc: format!("{stored_crc:04X}"),
-            computed_crc: format!("{computed_crc:04X}"),
-            vibration: vibration_summary(vibration),
-            settings,
-            raw_profile: profile.clone(),
-        },
-        device_path,
-        profile,
+    Ok(ProfileSummary {
+        device,
+        stored_crc: format!("{stored_crc:04X}"),
+        computed_crc: format!("{computed_crc:04X}"),
+        vibration: vibration_summary(vibration),
+        settings,
+        raw_profile: profile,
     })
 }
 
-pub fn set_vibration(
-    mut profile: Vec<u8>,
-    device_path: String,
+pub fn update_vibration(
+    profile: Vec<u8>,
     input: VibrationSettingsInput,
-) -> Result<(VibrationWriteResult, Vec<u8>), String> {
-    let stored_crc = protocol::stored_profile_crc(&profile)?;
-    let computed_crc = protocol::profile_crc(&profile)?;
-    if stored_crc != computed_crc {
-        return Err("プロファイルを確認できないため、保存できません".into());
-    }
-
+) -> Result<ProfileSummary, String> {
+    let mut profile = protocol::normalize_v37_profile(&profile)?;
     let settings = input.into_settings()?;
-    let crc = protocol::set_vibration_settings(&mut profile, settings)?;
-    let (device, ack, ack_value) = write_profile(&profile, &device_path)?;
-    let vibration = vibration_summary(protocol::vibration_settings(&profile)?);
-
-    Ok((
-        VibrationWriteResult {
-            device,
-            vibration,
-            crc: format!("{crc:04X}"),
-            ack: spaced_hex(&ack),
-            ack_value,
-            raw_profile: profile.clone(),
-        },
-        profile,
-    ))
+    protocol::set_vibration_settings(&mut profile, settings)?;
+    build_profile_summary(profile, None)
 }
 
-pub fn set_controller_settings(
-    mut profile: Vec<u8>,
-    device_path: String,
+pub fn update_controller_settings(
+    profile: Vec<u8>,
     input: ControllerSettingsInput,
-) -> Result<(ControllerSettingsWriteResult, Vec<u8>), String> {
-    let stored_crc = protocol::stored_profile_crc(&profile)?;
-    let computed_crc = protocol::profile_crc(&profile)?;
-    if stored_crc != computed_crc {
-        return Err("プロファイルを確認できないため、保存できません".into());
-    }
-
+) -> Result<ProfileSummary, String> {
+    let mut profile = protocol::normalize_v37_profile(&profile)?;
     let ControllerSettingsInput {
         rectangle_algorithm,
         left_stick,
@@ -340,20 +319,7 @@ pub fn set_controller_settings(
     )?;
     let crc = protocol::profile_crc(&profile)?;
     profile[..2].copy_from_slice(&crc.to_be_bytes());
-    let (device, ack, ack_value) = write_profile(&profile, &device_path)?;
-    let settings = settings_summary(&profile)?;
-
-    Ok((
-        ControllerSettingsWriteResult {
-            device,
-            settings,
-            crc: format!("{crc:04X}"),
-            ack: spaced_hex(&ack),
-            ack_value,
-            raw_profile: profile.clone(),
-        },
-        profile,
-    ))
+    build_profile_summary(profile, None)
 }
 
 pub fn read_device_settings(expected_device_path: &str) -> Result<DeviceSettingsSummary, String> {
@@ -545,14 +511,13 @@ pub fn write_macro(
     })
 }
 
-fn read_profile() -> Result<(DeviceSummary, Vec<u8>), String> {
-    read_profile_once()
+fn read_profile(expected_device_path: &str) -> Result<(DeviceSummary, Vec<u8>), String> {
+    read_profile_once(expected_device_path)
 }
 
-fn read_profile_once() -> Result<(DeviceSummary, Vec<u8>), String> {
+fn read_profile_once(expected_device_path: &str) -> Result<(DeviceSummary, Vec<u8>), String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let summary = summary(info);
     let device = api
         .open_path(info.path())
@@ -570,6 +535,7 @@ fn read_profile_once() -> Result<(DeviceSummary, Vec<u8>), String> {
             let received_bytes = profile.len();
             drop(device);
             return Err(diagnose_profile_read_timeout(
+                expected_device_path,
                 received_fragments,
                 received_bytes,
             ));
@@ -594,8 +560,12 @@ fn read_profile_once() -> Result<(DeviceSummary, Vec<u8>), String> {
     Err("profile did not complete within 16 reports".into())
 }
 
-fn diagnose_profile_read_timeout(received_fragments: u8, received_bytes: usize) -> String {
-    match read_profile_size() {
+fn diagnose_profile_read_timeout(
+    expected_device_path: &str,
+    received_fragments: u8,
+    received_bytes: usize,
+) -> String {
+    match read_profile_size(expected_device_path) {
         Ok(size) => format!(
             "GetBaseProfile (D6) did not complete after {received_fragments} fragments ({received_bytes} bytes), but GetProfileSize (D3) reports {size} bytes. The short command path is alive; D6 firmware state and host transfer/reassembly state are not yet distinguishable. Stop retrying D6. A HOME-button reset recovered this state in testing, but also restored the observed profile to defaults; use it only if losing current settings is acceptable."
         ),
@@ -605,10 +575,9 @@ fn diagnose_profile_read_timeout(received_fragments: u8, received_bytes: usize) 
     }
 }
 
-fn read_profile_size() -> Result<usize, String> {
+fn read_profile_size(expected_device_path: &str) -> Result<usize, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -877,6 +846,7 @@ mod live_tests {
         let device_path = scan_device()
             .expect("scan controller")
             .expect("connected controller")
+            .device
             .path;
         let macros = read_macros(&device_path).expect("D5/D9 macro read");
         let slot0 = macros
@@ -896,6 +866,7 @@ mod live_tests {
         let device_path = scan_device()
             .expect("scan controller")
             .expect("connected controller")
+            .device
             .path;
         let macros = read_macros(&device_path).expect("initial D5/D9 macro read");
         let (slot, original) = macros

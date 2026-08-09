@@ -1407,3 +1407,9 @@ The second BUP entry, `c2sl_ota_dfu_fota_V33_20241011.fot`, restores from 22 zli
 - The APP proves the runtime records, stabilization algorithm, and turbo field roles, but not every official M1/M3/M4 host-side save mutation.
 - Macro recording and actual playback output, trigger output law, LED zone headers, screen-record initiation, and cloud/local profile metadata remain static-only or require live validation.
 - v34/v35/v36/v39/v60 converter layouts are known, but this workspace's full editor/write path is intentionally v37-only; other versions must remain raw-preserved until each is captured.
+
+### Lite shared profile-store boundary
+
+BIGBIG WON Lite shares profiles through the official `%PROGRAMDATA%\\GamepadAssistant\\Config.db` SQLite database. The `t_Config.FConfigJson` value is a JSON array of raw profile bytes; the supported editing format is v37 with a 484-byte payload and the normal v37 CRC. The database layer preserves unknown metadata and unknown profile bytes, uses optimistic snapshots to reject external overwrites, and creates an online backup before its first write.
+
+Startup discovery uses the short `EF` device-UUID and `0B` ZKM-version queries. It does not issue `D6`. A `D6` read is only triggered by the explicit “read from device” action. Saving a profile updates SQLite only; applying a saved profile is a separate `D7` transaction with `A5 05 D7` ACK validation and no automatic `D6` readback.

@@ -119,6 +119,29 @@ p { color: #8e9aaa; font-size: 13px; line-height: 1.5; }
   background: rgba(16, 20, 26, .45);
 }
 
+.profile-library {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.profile-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #293546;
+  border-radius: 10px;
+  background: #141a22;
+}
+
+.profile-card-matched { border-color: #397ce8; }
+.profile-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.profile-card-heading h3 { color: #e8edf5; font-size: 15px; }
+.profile-card-details { color: #8996a7; font-size: 12px; overflow-wrap: anywhere; }
+.profile-card-actions { justify-content: flex-start; }
+.profile-compatible { color: #64d6a2; background: #17362c; }
+.profile-incompatible { color: #ffb5b5; background: #3b2024; }
+
 .details {
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
