@@ -20,4 +20,5 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 hidapi = { version = "2.6.6", default-features = false, features = ["windows-native"] }
 serde = { version = "1", features = ["derive"] }
+tauri-plugin-dialog = "2"
 

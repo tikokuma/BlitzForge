@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 
 type DeviceSummary = {
   vendorProduct: string;
@@ -50,11 +51,8 @@ type VibrationMode = "off" | "strong" | "standard" | "weak" | "custom";
 
 type ProfileSummary = {
   device: DeviceSummary;
-  length: number;
   storedCrc: string;
   computedCrc: string;
-  protocolVersion: string;
-  head: string;
   vibration: VibrationSettings;
   settings: ControllerSettings;
   rawProfile: number[];
@@ -99,26 +97,6 @@ type MacroWriteResult = {
   slot: MacroSlotSummary;
   ack: string;
   ackValue: number;
-};
-
-type AuxiliaryProbe = {
-  name: string;
-  command: string;
-  response: string | null;
-  error: string | null;
-};
-
-type AuxiliarySummary = {
-  device: DeviceSummary;
-  uuid: string | null;
-  zkm: number | null;
-  probes: AuxiliaryProbe[];
-};
-
-type AuxiliaryWriteResult = {
-  device: DeviceSummary;
-  request: string;
-  response: string | null;
 };
 
 type StepAccuracySettings = {
@@ -170,7 +148,6 @@ const VIBRATION_PRESETS: Record<Exclude<VibrationMode, "custom">, VibrationSetti
 type ControllerSettingsWriteResult = {
   device: DeviceSummary;
   settings: ControllerSettings;
-  head: string;
   crc: string;
   ack: string;
   ackValue: number;
@@ -184,6 +161,7 @@ const curveRangeIds = [
   "curve-p2-x",
   "curve-p2-y",
   "curve-edge",
+  "curve-stabilization",
 ] as const;
 
 const KEYMAP_TARGET_LABELS = [
@@ -232,7 +210,7 @@ type KeymapChoice =
   | { kind: "identity"; label: string }
   | { kind: "controller"; slot: number; label: string }
   | { kind: "keyboard"; modifier: number; usage: number; secondUsage: number; label: string }
-  | { kind: "none"; label: "Null" };
+  | { kind: "none"; label: "なし" };
 
 const KEYMAP_VISIBLE_SOURCES = [
   { slot: 23, label: "M1" },
@@ -260,7 +238,7 @@ const KEYMAP_VISIBLE_SOURCES = [
 
 const KEYMAP_CONTROLLER_CHOICES: readonly KeymapChoice[] = [
   ...KEYMAP_TARGET_LABELS.map((label, slot) => ({ kind: "controller" as const, slot, label })),
-  { kind: "none", label: "Null" },
+  { kind: "none", label: "なし" },
 ];
 
 const KEYBOARD_KEYS = [
@@ -315,8 +293,6 @@ const MACRO_INPUT_OPTIONS = [
   ["B", 0x00000008], ["X", 0x00000010], ["Y", 0x00000040], ["LB", 0x00000100],
   ["LT", 0x00000080], ["RB", 0x00000200], ["RT", 0x00002000], ["L3 / R3", 0x00004000],
 ] as const;
-
-const MACRO_KNOWN_MASK = MACRO_INPUT_OPTIONS.reduce((value, [, mask]) => (value | mask) >>> 0, 0);
 
 type MacroStep = {
   durationMs: number;
@@ -385,11 +361,6 @@ function syncActions() {
   byId<HTMLButtonElement>("refresh-macros").disabled = busy || !deviceConnected;
   byId<HTMLButtonElement>("add-macro-step").disabled = busy || !macroDraftRecord || (macroDraftRecord.length - 10) / 10 >= 64;
   byId<HTMLButtonElement>("write-macro").disabled = busy || !deviceConnected || !macroDraftRecord;
-  byId<HTMLButtonElement>("apply-macro-header").disabled = busy || !macroDraftRecord;
-  byId<HTMLButtonElement>("refresh-auxiliary").disabled = busy || !deviceConnected;
-  byId<HTMLButtonElement>("write-logo-led").disabled = busy || !deviceConnected;
-  byId<HTMLButtonElement>("write-led-brightness").disabled = busy || !deviceConnected;
-  byId<HTMLButtonElement>("write-lighting-mode").disabled = busy || !deviceConnected;
 }
 
 function renderDetails(id: string, rows: Array<[string, string]>) {
@@ -442,8 +413,6 @@ function clearProfile() {
   currentDeviceSettings = null;
   byId("settings-profile-status").textContent = "";
   renderDetails("profile-details", []);
-  byId("profile-head").textContent = "";
-  byId("profile-head").hidden = true;
   byId("profile-hint").textContent = "まだプロファイルを読み込んでいません。";
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
@@ -453,25 +422,28 @@ function clearProfile() {
 
 function renderProfile(profile: ProfileSummary) {
   const crcState = profile.storedCrc === profile.computedCrc ? "一致" : "不一致";
-  byId("settings-profile-status").textContent = `v${profile.protocolVersion} / ${profile.length} bytes / CRC ${profile.storedCrc} (${crcState})`;
+  byId("settings-profile-status").textContent = crcState === "一致"
+    ? "プロファイル読み込み済み"
+    : "プロファイルを確認してください";
   const rapid = profile.settings.rapidFire;
   const rapidState = [rapid.m1, rapid.m2, rapid.m3, rapid.m4]
-    .map((value, index) => `M${index + 1}: ${value === null ? "不明" : value ? "ON" : "OFF"}`)
+    .map((value, index) => `M${index + 1}: ${value === null ? "不明" : value ? "有効" : "無効"}`)
     .join(" / ");
   const timing = rapid.timing
-    ? `${rapid.timing.hz} Hz / ${rapid.timing.periodMs} ms`
-    : rapid.speedIndex === null ? "不明" : `index ${rapid.speedIndex}`;
+    ? `${rapid.timing.hz}回/秒`
+    : rapid.speedIndex === null ? "不明" : "設定済み";
+  const changedKeymaps = profile.settings.keyBindings
+    .filter((entry) => entry.toUpperCase() !== KEYMAP_DEFAULT_ENTRY)
+    .length;
+  const curveSummary = (curve: CurveSettings) =>
+    `センター ${curve.center} / エッジ ${curve.edge} / 安定化 ${curve.stabilization}`;
   renderDetails("profile-details", [
-    ["プロトコル", `v${profile.protocolVersion}`],
-    ["サイズ", `${profile.length} bytes`],
-    ["CRC", `${profile.storedCrc} / ${profile.computedCrc} (${crcState})`],
     ["振動", `左 ${profile.vibration.left.min}–${profile.vibration.left.max} / 右 ${profile.vibration.right.min}–${profile.vibration.right.max}`],
-    ["矩形アルゴリズム", profile.settings.rectangleAlgorithm ? "有効" : "無効"],
-    ["連射", `${rapidState} / speed ${timing}`],
+    ["左スティック", curveSummary(profile.settings.leftStick)],
+    ["右スティック", curveSummary(profile.settings.rightStick)],
+    ["キーバインド", changedKeymaps === 0 ? "標準" : `${changedKeymaps}件変更`],
+    ["連射", `${rapidState} / ${timing}`],
   ]);
-  const head = byId("profile-head");
-  head.textContent = profile.head;
-  head.hidden = profile.head.length === 0;
   byId("profile-hint").textContent = "読み込み済みです。設定を開いて編集できます。";
 }
 
@@ -510,6 +482,7 @@ function updateCurveFromDirectInput(id: string) {
   const value = clampRangeValue(id, parsed);
   byId<HTMLInputElement>(id).value = String(value);
   input.value = String(value);
+  updateRangeOutput(id);
   markSettingsDirty();
 }
 
@@ -519,6 +492,7 @@ function commitCurveDirectInput(id: string) {
   const value = Number.isFinite(parsed) ? clampRangeValue(id, parsed) : readRangeValue(id);
   byId<HTMLInputElement>(id).value = String(value);
   input.value = String(value);
+  updateRangeOutput(id);
   markSettingsDirty();
 }
 
@@ -558,6 +532,24 @@ function readVibrationSettings(): VibrationSettings {
   };
 }
 
+const VIBRATION_MIN_WIDTH = 20;
+
+function enforceVibrationWidth(grip: "left" | "right", changed: "min" | "max") {
+  const minId = `vibration-${grip}-min`;
+  const maxId = `vibration-${grip}-max`;
+  let min = clampRangeValue(minId, readRangeValue(minId));
+  let max = clampRangeValue(maxId, readRangeValue(maxId));
+  if (changed === "min") {
+    min = Math.min(min, 255 - VIBRATION_MIN_WIDTH);
+    max = Math.max(max, min + VIBRATION_MIN_WIDTH);
+  } else {
+    max = Math.max(max, VIBRATION_MIN_WIDTH);
+    min = Math.min(min, max - VIBRATION_MIN_WIDTH);
+  }
+  setRangeControl(minId, min);
+  setRangeControl(maxId, max);
+}
+
 function updateVibrationEditorState() {
   const mode = byId<HTMLSelectElement>("vibration-mode").value as VibrationMode;
   const custom = mode === "custom";
@@ -569,19 +561,19 @@ function updateVibrationEditorState() {
   ] as const) {
     byId<HTMLInputElement>(id).disabled = !custom;
   }
-  byId("vibration-mode-help").textContent = mode === "off"
-    ? "オフでは公式アプリと同じく、左右を0–1に固定します。"
-    : custom
-      ? "カスタムでは最大−最小を20以上にしてください。"
-      : "プリセット値です。個別に変更する場合はカスタムを選択してください。";
 }
 
 function setVibrationControls(settings: VibrationSettings) {
-  setRangeControl("vibration-left-min", settings.left.min);
-  setRangeControl("vibration-left-max", settings.left.max);
-  setRangeControl("vibration-right-min", settings.right.min);
-  setRangeControl("vibration-right-max", settings.right.max);
-  byId<HTMLSelectElement>("vibration-mode").value = vibrationMode(settings);
+  const mode = vibrationMode(settings);
+  const values = mode === "custom" && [settings.left, settings.right]
+    .some((grip) => grip.max < grip.min || grip.max - grip.min < VIBRATION_MIN_WIDTH)
+    ? { left: { min: 0, max: 255 }, right: { min: 0, max: 255 } }
+    : settings;
+  setRangeControl("vibration-left-min", values.left.min);
+  setRangeControl("vibration-left-max", values.left.max);
+  setRangeControl("vibration-right-min", values.right.min);
+  setRangeControl("vibration-right-max", values.right.max);
+  byId<HTMLSelectElement>("vibration-mode").value = mode;
   updateVibrationEditorState();
 }
 
@@ -592,7 +584,7 @@ function applyVibrationMode(mode: VibrationMode) {
   }
   const current = readVibrationSettings();
   const hasEditableWidth = [current.left, current.right]
-    .every((grip) => grip.max >= grip.min && grip.max - grip.min >= 20);
+    .every((grip) => grip.max >= grip.min && grip.max - grip.min >= VIBRATION_MIN_WIDTH);
   if (!hasEditableWidth) {
     setVibrationControls({
       left: { min: 0, max: 255 },
@@ -614,15 +606,6 @@ function cloneDeviceSettings(settings: DeviceSettings): DeviceSettings {
   };
 }
 
-function formatHexByte(value: number): string {
-  return `0x${value.toString(16).padStart(2, "0").toUpperCase()}`;
-}
-
-function keymapTargetLabel(value: number): string {
-  if (value === 0xff) return "未設定";
-  return value < KEYMAP_TARGET_LABELS.length ? KEYMAP_TARGET_LABELS[value] : "unknown target";
-}
-
 function normalizeKeymapEntry(raw: string): string {
   const compact = raw.replace(/[^0-9a-f]/gi, "").toUpperCase();
   return /^[0-9A-F]{8}$/.test(compact) ? compact : KEYMAP_DEFAULT_ENTRY;
@@ -637,23 +620,6 @@ function formatKeymapBytes(bytes: number[]): string {
   return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
-function describeKeymapEntry(raw: string): string {
-  if (!/^[0-9A-F]{8}$/.test(raw)) {
-    return "byte0～3: 8桁の16進数を入力";
-  }
-  const bytes = raw.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
-  if (bytes[0] === KEYMAP_KEYBOARD_TYPE) {
-    const modifier = KEYBOARD_MODIFIERS.find(([, value]) => value === bytes[1]);
-    const first = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[2]);
-    const second = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[3]);
-    return `keyboard / modifier ${formatHexByte(bytes[1])} ${modifier?.[0] ?? "unknown"} / usage0 ${formatHexByte(bytes[2])} ${first?.[0] ?? "unknown"} / usage1 ${formatHexByte(bytes[3])} ${second?.[0] ?? "none"}`;
-  }
-  const targets = bytes.slice(1).map((value, index) =>
-    `byte${index + 1}: ${keymapTargetLabel(value)} (${formatHexByte(value)})`,
-  );
-  return [`byte0: type ${formatHexByte(bytes[0])}`, ...targets].join(" / ");
-}
-
 function keymapChoiceForEntry(raw: string, sourceSlot: number): KeymapChoice | null {
   const bytes = parseKeymapEntry(raw);
   if (!bytes) return null;
@@ -661,7 +627,7 @@ function keymapChoiceForEntry(raw: string, sourceSlot: number): KeymapChoice | n
     return { kind: "identity", label: KEYMAP_SLOT_LABELS[sourceSlot] ?? "標準" };
   }
   if (bytes[0] === KEYMAP_CONTROLLER_TYPE) {
-    if (bytes[1] === KEYMAP_NO_TARGET) return { kind: "none", label: "Null" };
+    if (bytes[1] === KEYMAP_NO_TARGET) return { kind: "none", label: "なし" };
     const label = KEYMAP_TARGET_LABELS[bytes[1]];
     return label ? { kind: "controller", slot: bytes[1], label } : null;
   }
@@ -688,12 +654,12 @@ function keymapChoiceForEntry(raw: string, sourceSlot: number): KeymapChoice | n
 function keymapDisplay(raw: string, sourceSlot: number): { label: string; detail: string; choice: KeymapChoice | null } {
   const choice = keymapChoiceForEntry(raw, sourceSlot);
   if (!choice) {
-    return { label: "生バイト", detail: describeKeymapEntry(raw), choice: null };
+    return { label: "未設定", detail: "この割り当ては変更できません", choice: null };
   }
   if (choice.kind === "identity") {
-    return { label: choice.label, detail: "標準マッピング / 00000000", choice };
+    return { label: choice.label, detail: "標準", choice };
   }
-  return { label: choice.label, detail: `選択済み / ${raw}`, choice };
+  return { label: choice.label, detail: "設定済み", choice };
 }
 
 function rapidFireForSlot(slot: number): boolean | null {
@@ -753,7 +719,7 @@ function renderKeymapRows() {
       source.textContent = label;
       const sourceHint = document.createElement("small");
       sourceHint.className = "keymap-hint";
-      sourceHint.textContent = `スロット ${String(slot + 1).padStart(2, "0")} / 0x${(0x164 + slot * 4).toString(16).toUpperCase().padStart(3, "0")}`;
+      sourceHint.textContent = `スロット ${String(slot + 1).padStart(2, "0")}`;
       sourceCell.append(source, sourceHint);
 
       const mapping = keymapDisplay(keymapDraft[slot] ?? KEYMAP_DEFAULT_ENTRY, slot);
@@ -782,9 +748,9 @@ function renderKeymapRows() {
         rapid.disabled = rapidState === null;
         rapid.setAttribute("aria-pressed", String(rapidState === true));
         rapid.addEventListener("click", () => toggleRapidFire(slot));
-        rapid.title = rapidState === null ? "M2連射の保存値を判定できません" : "M2連射を切り替えます";
+        rapid.title = rapidState === null ? "この連射状態は判定できません" : "連射を切り替えます";
       } else {
-        rapid.title = rapidState === null ? "この連射フラグは未解析です" : "読み取り専用の連射状態";
+        rapid.title = rapidState === null ? "この連射状態は判定できません" : "読み取り専用の連射状態";
       }
       const rapidDot = document.createElement("span");
       rapidDot.className = "keymap-rapid-dot";
@@ -793,45 +759,6 @@ function renderKeymapRows() {
       rapid.append("連射", rapidDot);
 
       row.append(sourceCell, mappingCell, rapid);
-      return row;
-    }),
-  );
-}
-
-function renderKeymapRaw() {
-  const container = byId("keymap-raw-grid");
-  container.replaceChildren(
-    ...Array.from({ length: 32 }, (_, index) => {
-      const row = document.createElement("label");
-      row.className = "keymap-raw-row";
-      const name = document.createElement("span");
-      name.textContent = `${KEYMAP_SLOT_LABELS[index]} / slot ${String(index + 1).padStart(2, "0")}`;
-      const input = document.createElement("input");
-      input.type = "text";
-      input.inputMode = "text";
-      input.maxLength = 8;
-      input.pattern = "[0-9A-Fa-f]{8}";
-      input.value = keymapDraft[index] ?? KEYMAP_DEFAULT_ENTRY;
-      input.dataset.keymapEntry = String(index);
-      input.setAttribute("aria-label", `${KEYMAP_SLOT_LABELS[index]} キーバインド スロット ${index + 1}`);
-      input.addEventListener("input", () => {
-        input.value = input.value.replace(/[^0-9a-f]/gi, "").slice(0, 8).toUpperCase();
-        keymapDraft[index] = input.value;
-        renderKeymapRows();
-        updateKeymapSummary();
-        markSettingsDirty();
-      });
-      input.addEventListener("change", () => {
-        input.value = normalizeKeymapEntry(input.value);
-        keymapDraft[index] = input.value;
-        renderKeymapRows();
-        updateKeymapSummary();
-        markSettingsDirty();
-      });
-      const hint = document.createElement("small");
-      hint.className = "keymap-hint";
-      hint.textContent = describeKeymapEntry(input.value);
-      row.append(name, input, hint);
       return row;
     }),
   );
@@ -846,7 +773,6 @@ function renderKeymap(keyBindings: string[], rapidFire: RapidFireSettings) {
   rapidFireDraft = { ...rapidFire };
   keymapDraft = Array.from({ length: 32 }, (_, index) => normalizeKeymapEntry(keyBindings[index] ?? KEYMAP_DEFAULT_ENTRY));
   renderKeymapRows();
-  renderKeymapRaw();
   updateKeymapSummary();
 }
 
@@ -873,34 +799,18 @@ function renderRapidFireControls(settings: RapidFireSettings) {
     const option = document.createElement("option");
     option.dataset.generated = "true";
     option.value = String(settings.speedIndex);
-    option.textContent = `unknown index ${settings.speedIndex} (preserved)`;
+    option.textContent = "現在の設定";
     speed.append(option);
   }
   speed.value = settings.speedIndex === null || settings.speedIndex === undefined
     ? "unknown"
     : String(settings.speedIndex);
   const timing = settings.speedIndex === null || settings.speedIndex === undefined
-    ? "unknown"
+    ? "不明"
     : settings.timing
-      ? `${settings.timing.hz} Hz / ${settings.timing.periodMs} ms period / ${settings.timing.halfPeriodMs} ms half-period`
-      : `speed index ${settings.speedIndex} (timing not mapped)`;
+      ? `${settings.timing.hz}回/秒`
+      : "現在の設定";
   byId("rapid-timing").textContent = timing;
-}
-
-function formatBytes(bytes: number[]): string {
-  return bytes.map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join(" ");
-}
-
-function parseMacroRecord(raw: string): number[] {
-  const compact = raw.replace(/[^0-9a-f]/gi, "");
-  if (compact.length === 0 || compact.length % 2 !== 0) {
-    throw new Error("macro record must contain an even number of hexadecimal digits");
-  }
-  const bytes = compact.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
-  if (bytes.length < 10 || (bytes.length - 10) % 10 !== 0 || bytes.length > 0x294) {
-    throw new Error("macro record must be 10-byte header plus 10-byte steps (maximum 0x294 bytes)");
-  }
-  return bytes;
 }
 
 function signedMacroByte(value: number): number {
@@ -942,15 +852,6 @@ function updateMacroStep(record: number[], index: number, changes: Partial<Macro
   record.splice(offset, 10, ...step);
 }
 
-function parseMacroMask(value: string): number {
-  const compact = value.trim().replace(/^0x/i, "").replace(/[\s_]/g, "");
-  if (compact.length === 0) return 0;
-  if (!/^[0-9a-f]{1,8}$/i.test(compact)) {
-    throw new Error("その他マスクは0x00000000〜0xFFFFFFFFで入力してください");
-  }
-  return Number.parseInt(compact, 16) >>> 0;
-}
-
 function macroInputLabels(mask: number): string[] {
   return MACRO_INPUT_OPTIONS
     .filter(([, optionMask]) => ((((mask >>> 0) & optionMask) >>> 0) === optionMask))
@@ -973,7 +874,7 @@ function setMacroSelectValue(id: string, value: number) {
     const option = document.createElement("option");
     option.dataset.generated = "true";
     option.value = textValue;
-    option.textContent = `未解析 (0x${value.toString(16).padStart(2, "0").toUpperCase()})`;
+    option.textContent = "現在の設定";
     select.append(option);
   }
   select.value = textValue;
@@ -981,10 +882,6 @@ function setMacroSelectValue(id: string, value: number) {
 
 function renderMacroHeader(record: number[]) {
   if (record.length < 10) return;
-  byId<HTMLInputElement>("macro-setting").value = String(record[4]);
-  byId<HTMLInputElement>("macro-m-key").value = String(record[5]);
-  byId<HTMLInputElement>("macro-run-key").value = String(record[6]);
-  byId<HTMLInputElement>("macro-flags").value = String(record[7]);
   byId<HTMLInputElement>("macro-repeat").value = String((record[8] << 8) | record[9]);
   setMacroSelectValue("macro-m-key-select", record[5]);
   setMacroSelectValue("macro-run-key-select", record[6]);
@@ -1014,36 +911,6 @@ function syncFriendlyMacroHeader(record: number[]) {
   record[7] = flags;
   record[8] = repeat >> 8;
   record[9] = repeat & 0xff;
-  byId<HTMLInputElement>("macro-m-key").value = String(mKey);
-  byId<HTMLInputElement>("macro-run-key").value = String(runKey);
-  byId<HTMLInputElement>("macro-flags").value = String(flags);
-}
-
-function syncMacroRawFromDraft() {
-  if (!macroDraftRecord) return;
-  byId<HTMLTextAreaElement>("macro-raw").value = formatBytes(macroDraftRecord);
-}
-
-function applyMacroHeader() {
-  try {
-    const record = parseMacroRecord(byId<HTMLTextAreaElement>("macro-raw").value);
-    record[4] = macroNumber("macro-setting", 0xff);
-    record[5] = macroNumber("macro-m-key", 0xff);
-    record[6] = macroNumber("macro-run-key", 0xff);
-    record[7] = macroNumber("macro-flags", 0xff);
-    const repeat = macroNumber("macro-repeat", 0xffff);
-    record[8] = repeat >> 8;
-    record[9] = repeat & 0xff;
-    macroDraftRecord = record;
-    renderMacroHeader(record);
-    renderMacroSteps(record);
-    syncMacroRawFromDraft();
-    byId("macro-slot-details").textContent = "ヘッダーを編集中です。保存時に長さとCRCを再計算します。";
-    syncActions();
-  } catch (error) {
-    byId("macro-output").textContent = errorMessage(error);
-    setMessage(errorMessage(error));
-  }
 }
 
 function macroSlotDescription(slot: MacroSlotSummary): string {
@@ -1054,7 +921,6 @@ function macroSlotDescription(slot: MacroSlotSummary): string {
 function commitMacroStep(index: number, changes: Partial<MacroStep>) {
   if (!macroDraftRecord) return;
   updateMacroStep(macroDraftRecord, index, changes);
-  syncMacroRawFromDraft();
   renderMacroSteps(macroDraftRecord);
   syncActions();
 }
@@ -1097,7 +963,6 @@ function renderMacroSteps(record: number[] | null) {
     remove.addEventListener("click", () => {
       if (!macroDraftRecord) return;
       macroDraftRecord.splice(10 + index * 10, 10);
-      syncMacroRawFromDraft();
       renderMacroSteps(macroDraftRecord);
       syncActions();
     });
@@ -1154,23 +1019,6 @@ function renderMacroSteps(record: number[] | null) {
     }
     card.append(keyGrid);
 
-    const otherLabel = document.createElement("label");
-    otherLabel.className = "macro-other-mask";
-    otherLabel.textContent = "その他マスク（上級者向け）";
-    const other = document.createElement("input");
-    other.type = "text";
-    other.value = `0x${((step.inputMask & ~MACRO_KNOWN_MASK) >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
-    other.addEventListener("change", () => {
-      try {
-        const current = readMacroStep(macroDraftRecord ?? record, index);
-        commitMacroStep(index, { inputMask: (((current.inputMask & MACRO_KNOWN_MASK) | parseMacroMask(other.value)) >>> 0) });
-      } catch (error) {
-        setMessage(errorMessage(error));
-      }
-    });
-    otherLabel.append(other);
-    card.append(otherLabel);
-
     const analogTitle = document.createElement("p");
     analogTitle.className = "macro-subheading";
     analogTitle.textContent = "スティック（-128〜127）";
@@ -1208,7 +1056,6 @@ function addMacroStep() {
     return;
   }
   macroDraftRecord.push(0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-  syncMacroRawFromDraft();
   renderMacroSteps(macroDraftRecord);
   syncActions();
 }
@@ -1221,12 +1068,11 @@ function selectMacroSlot(slot: number) {
   macroDraftRecord = selected.rawRecord.length >= 10 ? selected.rawRecord.slice() : null;
   if (macroDraftRecord) {
     renderMacroHeader(macroDraftRecord);
-    syncMacroRawFromDraft();
   }
   renderMacroSteps(macroDraftRecord);
   byId("macro-slot-details").textContent = selected.error
     ? `${macroSlotDescription(selected)}: ${selected.error}`
-    : `${macroSlotDescription(selected)} / ${selected.activeLength} bytes / CRC ${selected.crc}`;
+    : `${macroSlotDescription(selected)}。ここで編集できます。`;
   syncActions();
 }
 
@@ -1246,10 +1092,7 @@ function renderMacroSummary(summary: MacroSummary) {
   );
   const current = Number(byId<HTMLSelectElement>("macro-slot").value);
   selectMacroSlot(summary.slots.some((slot) => slot.slot === current) ? current : 0);
-  byId("macro-output").textContent = [
-    `D5: ${summary.listResponse}`,
-    ...summary.slots.map((slot) => `${macroSlotDescription(slot)} / length ${slot.activeLength} / CRC ${slot.crc}`),
-  ].join("\n");
+  byId("macro-output").textContent = "読み込み完了。編集するスロットを選択してください。";
 }
 
 async function refreshMacros() {
@@ -1270,10 +1113,12 @@ async function writeMacro() {
   if (!deviceConnected) return;
   try {
     const slot = Number(byId<HTMLSelectElement>("macro-slot").value);
-    const record = macroDraftRecord ? macroDraftRecord.slice() : parseMacroRecord(byId<HTMLTextAreaElement>("macro-raw").value);
+    if (!macroDraftRecord) {
+      throw new Error("先に実機からマクロを読み込んでください");
+    }
+    const record = macroDraftRecord.slice();
     syncFriendlyMacroHeader(record);
     macroDraftRecord = record;
-    syncMacroRawFromDraft();
     setBusy(true, `マクロ スロット${slot + 1}を保存し、実機で読み返しています…`);
     const result = await invoke<MacroWriteResult>("write_macro", { slot, rawRecord: record });
     if (macroSummary) {
@@ -1283,81 +1128,10 @@ async function writeMacro() {
       };
       renderMacroSummary(macroSummary);
     }
-    byId("macro-output").textContent = `D8 ACK: ${result.ack} (${result.ackValue})\nD9 readback: ${macroSlotDescription(result.slot)}\nraw: ${formatBytes(result.slot.rawRecord)}`;
-    setMessage(`マクロ スロット${slot + 1}を保存しました。実機readback確認済みです。`);
+    byId("macro-output").textContent = `${macroSlotDescription(result.slot)}を保存しました。`;
+    setMessage(`マクロ スロット${slot + 1}を保存しました。`);
   } catch (error) {
     byId("macro-output").textContent = errorMessage(error);
-    setMessage(errorMessage(error));
-  } finally {
-    setBusy(false);
-  }
-}
-
-function renderAuxiliary(summary: AuxiliarySummary) {
-  const parsed = [
-    `UUID (EF): ${summary.uuid ?? "不明"}`,
-    `ZKM (0B): ${summary.zkm === null ? "不明" : `0x${summary.zkm.toString(16).padStart(2, "0").toUpperCase()}`}`,
-    ...summary.probes.map((probe) => `${probe.name} ${probe.command}: ${probe.response ?? probe.error ?? "no response"}`),
-  ];
-  byId("auxiliary-output").textContent = parsed.join("\n");
-  const unsupported = summary.probes.filter((probe) => probe.error?.toLowerCase().includes("unsupported")).length;
-  byId("auxiliary-summary").textContent = `UUID: ${summary.uuid ?? "不明"} / ZKM: ${summary.zkm === null ? "不明" : `0x${summary.zkm.toString(16).padStart(2, "0").toUpperCase()}`} / LED取得: ${unsupported > 0 ? "この機種では未対応" : "応答あり"}`;
-}
-
-async function refreshAuxiliary() {
-  if (!deviceConnected) return;
-  setBusy(true, "デバイス状態を確認しています…");
-  try {
-    const summary = await invoke<AuxiliarySummary>("read_auxiliary");
-    renderAuxiliary(summary);
-    setMessage("デバイス状態を確認しました。");
-  } catch (error) {
-    byId("auxiliary-output").textContent = errorMessage(error);
-    byId("auxiliary-summary").textContent = "デバイス状態の確認に失敗しました。詳細を開いてください。";
-    setMessage(errorMessage(error));
-  } finally {
-    setBusy(false);
-  }
-}
-
-function parseColor(value: string): number[] {
-  const match = /^#([0-9a-f]{6})$/i.exec(value);
-  if (!match) throw new Error("LEDの色を選択してください");
-  return [
-    Number.parseInt(match[1].slice(0, 2), 16),
-    Number.parseInt(match[1].slice(2, 4), 16),
-    Number.parseInt(match[1].slice(4, 6), 16),
-  ];
-}
-
-function logoLedValues(): number[] {
-  return [1, 2, 3].flatMap((zone) => parseColor(byId<HTMLInputElement>(`logo-led-color-${zone}`).value));
-}
-
-function parseHexBytes(raw: string, expected: number): number[] {
-  const compact = raw.replace(/[^0-9a-f]/gi, "");
-  if (compact.length !== expected * 2) {
-    throw new Error(`expected exactly ${expected} hexadecimal byte(s)`);
-  }
-  return compact.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
-}
-
-async function writeAuxiliary(kind: string, raw: string, expected: number) {
-  if (!deviceConnected) return;
-  try {
-    const values = parseHexBytes(raw, expected);
-    const labels: Record<string, string> = {
-      "logo-led": "ロゴLED",
-      "led-brightness": "明るさ",
-      "lighting-mode": "点灯モード",
-    };
-    setBusy(true, `${labels[kind] ?? kind}を送信しています…`);
-    const result = await invoke<AuxiliaryWriteResult>("write_auxiliary", { kind, values });
-    byId("auxiliary-output").textContent = `${kind}\nrequest: ${result.request}\nresponse: ${result.response ?? "no response (no-wait setter)"}`;
-    byId("auxiliary-summary").textContent = `${labels[kind] ?? kind}を送信しました。${result.response ? "応答を受信しました。" : "この設定コマンドは応答を待ちません。"}`;
-    setMessage(`${labels[kind] ?? kind}を送信しました。`);
-  } catch (error) {
-    byId("auxiliary-output").textContent = errorMessage(error);
     setMessage(errorMessage(error));
   } finally {
     setBusy(false);
@@ -1394,7 +1168,7 @@ function renderKeymapChoiceButtons() {
     ...KEYBOARD_MODIFIERS.map(([label, value]) => {
       const option = document.createElement("option");
       option.value = String(value);
-      option.textContent = `${label} (0x${value.toString(16).padStart(2, "0").toUpperCase()})`;
+      option.textContent = label === "None" ? "なし" : label;
       return option;
     }),
   );
@@ -1409,7 +1183,7 @@ function renderKeymapChoiceButtons() {
     ...KEYBOARD_KEYS.map(([label, usage]) => {
       const option = document.createElement("option");
       option.value = String(usage);
-      option.textContent = `${label} (0x${usage.toString(16).padStart(2, "0").toUpperCase()})`;
+      option.textContent = label;
       return option;
     }),
   );
@@ -1499,16 +1273,9 @@ function confirmKeymapDialog() {
   if (activeKeymapSlot === null || pendingKeymapChoice === null) return;
   keymapDraft[activeKeymapSlot] = encodeKeymapChoice(pendingKeymapChoice);
   renderKeymapRows();
-  renderKeymapRaw();
   updateKeymapSummary();
   closeKeymapDialog();
   markSettingsDirty();
-}
-
-function updatePollingRateDisplay(value: number) {
-  const option = POLLING_RATE_OPTIONS.find((candidate) => candidate.code === value);
-  const label = option ? `${option.hz} Hz` : "不明なコード";
-  byId("polling-rate-hex").textContent = `${label} / raw ${formatHexByte(value)}`;
 }
 
 function setPollingRateControl(value: number) {
@@ -1518,11 +1285,10 @@ function setPollingRateControl(value: number) {
     const option = document.createElement("option");
     option.dataset.generated = "true";
     option.value = String(value);
-    option.textContent = `不明なコード (${formatHexByte(value)})`;
+    option.textContent = "現在の設定";
     select.append(option);
   }
   select.value = String(value);
-  updatePollingRateDisplay(value);
 }
 
 function stepAccuracyChoice(settings: StepAccuracySettings): string | null {
@@ -1541,7 +1307,7 @@ function setStepAccuracyChoice(settings: StepAccuracySettings) {
     const option = document.createElement("option");
     option.dataset.generated = "true";
     option.value = "unknown";
-    option.textContent = `不明な組み合わせ (mode ${formatHexByte(settings.mode)}, value 0x${settings.value.toString(16).padStart(4, "0").toUpperCase()})`;
+    option.textContent = "現在の設定（変更不可）";
     select.append(option);
   }
   select.value = choice ?? "unknown";
@@ -1592,7 +1358,7 @@ function readActiveCurve(): CurveSettings {
     point2X: readRangeValue("curve-p2-x"),
     point2Y: readRangeValue("curve-p2-y"),
     edge: readRangeValue("curve-edge"),
-    stabilization: curveDrafts[selectedStick].stabilization,
+    stabilization: readRangeValue("curve-stabilization"),
   };
 }
 
@@ -1607,7 +1373,7 @@ function setActiveCurve(curve: CurveSettings) {
   setRangeControl("curve-p2-x", curve.point2X);
   setRangeControl("curve-p2-y", curve.point2Y);
   setRangeControl("curve-edge", curve.edge);
-  byId("curve-stabilization").textContent = `0x${curve.stabilization.toString(16).padStart(2, "0").toUpperCase()}`;
+  setRangeControl("curve-stabilization", curve.stabilization);
   updateCurvePreview();
 }
 
@@ -1622,7 +1388,7 @@ function selectStick(stick: Stick) {
   byId("stick-right-tab").classList.toggle("active", !left);
   byId("stick-left-tab").setAttribute("aria-selected", String(left));
   byId("stick-right-tab").setAttribute("aria-selected", String(!left));
-  byId("stick-description").textContent = `${left ? "左" : "右"}スティックのDefaultカーブを調整します。数値入力とポイントのドラッグに対応しています。`;
+  byId("stick-description").textContent = `${left ? "左" : "右"}スティックの設定`;
   updateCurvePreview();
 }
 
@@ -1649,7 +1415,8 @@ function curvesEqual(left: CurveSettings, right: CurveSettings): boolean {
     && left.point1Y === right.point1Y
     && left.point2X === right.point2X
     && left.point2Y === right.point2Y
-    && left.edge === right.edge;
+    && left.edge === right.edge
+    && left.stabilization === right.stabilization;
 }
 
 function settingsEqual(settings: ControllerSettings, input: ControllerSettingsInput): boolean {
@@ -1694,9 +1461,6 @@ function updateCurvePreview() {
   edgeCompensation.setAttribute("height", String(edgeCompensationHeight));
   byId("curve-center-label").textContent = `センター ${curve.center}`;
   byId("curve-edge-label").textContent = `エッジ ${curve.edge}`;
-  byId("curve-compensation-label").textContent = curve.center < 0 || curve.edge < 0
-    ? "オレンジ: 補償領域"
-    : "補償なし";
 }
 
 type CurvePoint = "point1" | "point2";
@@ -1848,10 +1612,10 @@ async function readProfile(openSettings = false) {
     try {
       await refreshDeviceSettings();
       setMessage(profile.storedCrc === profile.computedCrc
-        ? "読み取り成功。コントローラー設定を開けます。"
-        : "CRCが一致しません。書き込みは行わないでください。");
+        ? "プロファイルを読み込みました。"
+        : "プロファイルを読み込みましたが、内容を確認できません。保存はできません。");
     } catch (error) {
-      setMessage(`プロファイルは読み取りましたが、F6/F7設定の読み取りに失敗しました: ${errorMessage(error)}`);
+      setMessage(`プロファイルは読み取りましたが、デバイス設定の読み取りに失敗しました: ${errorMessage(error)}`);
     }
     if (openSettings) {
       showView("settings");
@@ -1865,7 +1629,7 @@ async function readProfile(openSettings = false) {
 
 async function importProfileFile(file: File) {
   if (!deviceConnected) return;
-  setBusy(true, "公式v37プロファイルを検証しています…");
+  setBusy(true, "プロファイルを確認しています…");
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const profile = await invoke<ProfileSummary>("load_profile", { profile: Array.from(bytes) });
@@ -1873,7 +1637,7 @@ async function importProfileFile(file: File) {
     renderProfile(profile);
     renderSettings(profile);
     showView("settings");
-    setMessage("公式v37プロファイルを読み込みました。実機へ適用できます。");
+    setMessage("プロファイルを読み込みました。実機へ適用できます。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1882,19 +1646,25 @@ async function importProfileFile(file: File) {
   }
 }
 
-function exportProfile() {
+async function exportProfile() {
   if (!currentProfile) return;
   const framed = new Uint8Array(4 + currentProfile.rawProfile.length);
   framed.set([0xa4, 0xd7, 0xe4, 0x01]);
   framed.set(currentProfile.rawProfile, 4);
-  const blob = new Blob([framed], { type: "application/octet-stream" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "bigbigwon-v37-profile-frame.bin";
-  link.click();
-  URL.revokeObjectURL(url);
-  setMessage("公式形式の488バイトv37プロファイルを書き出しました。");
+  setBusy(true, "保存先を選択してください…");
+  try {
+    const path = await save({
+      defaultPath: "bigbigwon-profile.bin",
+      filters: [{ name: "BIGBIGWONプロファイル", extensions: ["bin"] }],
+    });
+    if (!path) return;
+    await invoke("export_profile", { path, data: Array.from(framed) });
+    setMessage(`プロファイルを書き出しました。\n${path}`);
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function applyProfile() {
@@ -1906,7 +1676,7 @@ async function applyProfile() {
     currentProfile = result;
     renderProfile(result);
     renderSettings(result);
-    setMessage("公式v37プロファイルを実機へ適用しました。");
+    setMessage("プロファイルを実機へ適用しました。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1936,13 +1706,12 @@ async function saveSettings() {
       device: result.device,
       storedCrc: result.crc,
       computedCrc: result.crc,
-      head: result.head,
       settings: result.settings,
       rawProfile: result.rawProfile,
     };
     renderProfile(currentProfile);
     renderSettings(currentProfile);
-    setMessage(`保存成功: CRC ${result.crc} / ACK ${result.ack} (${result.ackValue})`);
+    setMessage("コントローラー設定を保存しました。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1967,7 +1736,7 @@ async function saveVibration() {
     };
     renderProfile(currentProfile);
     renderSettings(currentProfile);
-    setMessage(`保存成功: 左 ${result.vibration.left.min}–${result.vibration.left.max} / 右 ${result.vibration.right.min}–${result.vibration.right.max} / CRC ${result.crc} / ACK ${result.ack}`);
+    setMessage("バイブレーションを保存しました。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1987,7 +1756,7 @@ async function saveDeviceSettings() {
     setDeviceSettingsControls(deviceSettingsDraft);
     deviceSettingsDirty = false;
     byId("device-dirty").hidden = true;
-    setMessage(`送信成功: F6 ${result.pollingCommand} / F7 ${result.stepAccuracyCommand}`);
+    setMessage("デバイス設定を保存しました。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -2008,7 +1777,7 @@ window.addEventListener("DOMContentLoaded", () => {
     const file = (event.target as HTMLInputElement).files?.[0];
     if (file) void importProfileFile(file);
   });
-  byId("export-profile").addEventListener("click", exportProfile);
+  byId("export-profile").addEventListener("click", () => void exportProfile());
   byId("apply-profile").addEventListener("click", () => void applyProfile());
   byId("back-home").addEventListener("click", () => showView("home"));
   byId("save-settings").addEventListener("click", () => void saveSettings());
@@ -2017,24 +1786,6 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("refresh-device-settings").addEventListener("click", () => void refreshDeviceSettings());
   byId("refresh-macros").addEventListener("click", () => void refreshMacros());
   byId("write-macro").addEventListener("click", () => void writeMacro());
-  byId("apply-macro-header").addEventListener("click", applyMacroHeader);
-  byId("refresh-auxiliary").addEventListener("click", () => void refreshAuxiliary());
-  byId("write-logo-led").addEventListener("click", () => {
-    try {
-      void writeAuxiliary("logo-led", formatBytes(logoLedValues()), 9);
-    } catch (error) {
-      setMessage(errorMessage(error));
-    }
-  });
-  byId<HTMLInputElement>("led-brightness").addEventListener("input", (event) => {
-    const value = Number((event.target as HTMLInputElement).value);
-    byId("led-brightness-value").textContent = String(value);
-  });
-  byId("write-led-brightness").addEventListener("click", () => {
-    const value = Number(byId<HTMLInputElement>("led-brightness").value);
-    void writeAuxiliary("led-brightness", value.toString(16).padStart(2, "0"), 1);
-  });
-  byId("write-lighting-mode").addEventListener("click", () => void writeAuxiliary("lighting-mode", byId<HTMLInputElement>("lighting-mode").value, 1));
   byId("tab-stick").addEventListener("click", () => selectSettingsTab("stick"));
   byId("tab-keymap").addEventListener("click", () => selectSettingsTab("keymap"));
   byId("tab-device").addEventListener("click", () => selectSettingsTab("device"));
@@ -2073,9 +1824,8 @@ window.addEventListener("DOMContentLoaded", () => {
       if (!macroDraftRecord) return;
       try {
         syncFriendlyMacroHeader(macroDraftRecord);
-        syncMacroRawFromDraft();
         renderMacroHeader(macroDraftRecord);
-        byId("macro-slot-details").textContent = `スロット ${Number(byId<HTMLSelectElement>("macro-slot").value) + 1}を編集中です。保存時にCRCを再計算します。`;
+        byId("macro-slot-details").textContent = `スロット ${Number(byId<HTMLSelectElement>("macro-slot").value) + 1}を編集中です。`;
       } catch (error) {
         setMessage(errorMessage(error));
       }
@@ -2094,7 +1844,6 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("stick-right-tab").addEventListener("click", () => selectStick("rightStick"));
   byId("rectangle-algorithm").addEventListener("change", markSettingsDirty);
   byId<HTMLSelectElement>("polling-rate").addEventListener("change", () => {
-    updatePollingRateDisplay(Number(byId<HTMLSelectElement>("polling-rate").value));
     markDeviceSettingsDirty();
   });
   byId<HTMLSelectElement>("step-accuracy").addEventListener("change", () => {
@@ -2109,15 +1858,6 @@ window.addEventListener("DOMContentLoaded", () => {
     setStepAccuracyChoice(readDeviceSettings().stepAccuracy);
     markDeviceSettingsDirty();
   });
-  for (const id of ["step-accuracy-mode", "step-accuracy-value", "step-accuracy-extension"] as const) {
-    byId<HTMLInputElement>(id).addEventListener("input", () => {
-      if (id !== "step-accuracy-extension") {
-        setStepAccuracyChoice(readDeviceSettings().stepAccuracy);
-      }
-      markDeviceSettingsDirty();
-    });
-  }
-
   for (const id of curveRangeIds) {
     byId<HTMLInputElement>(id).addEventListener("input", () => {
       updateRangeOutput(id);
@@ -2143,7 +1883,9 @@ window.addEventListener("DOMContentLoaded", () => {
     "vibration-right-max",
   ] as const) {
     byId<HTMLInputElement>(id).addEventListener("input", () => {
-      updateRangeOutput(id);
+      const grip = id.includes("left") ? "left" : "right";
+      const changed = id.endsWith("-min") ? "min" : "max";
+      enforceVibrationWidth(grip, changed);
       byId<HTMLSelectElement>("vibration-mode").value = vibrationMode(readVibrationSettings());
       updateVibrationEditorState();
       markVibrationDirty();

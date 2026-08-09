@@ -121,65 +121,6 @@ pub fn get_macro_info_report(slot: u8) -> Result<Vec<u8>, String> {
     Ok(command_report(&[0xa5, 0x05, 0xd9, slot, checksum]))
 }
 
-pub fn get_uuid_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x0c, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0xa0])
-}
-
-pub fn get_zkm_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0x0b, 0xb4])
-}
-
-pub fn get_smart_trigger_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0xf8, 0xa1])
-}
-
-pub fn get_logo_led_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0xf5, 0x9e])
-}
-
-pub fn get_led_brightness_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0x72, 0x1b])
-}
-
-pub fn get_led_show_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0x70, 0x19])
-}
-
-pub fn get_lighting_mode_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0x73, 0x1c])
-}
-
-pub fn get_device_mode_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0xe1, 0x8a])
-}
-
-pub fn get_power_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0xad, 0x56])
-}
-
-pub fn get_wireless_flag_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0xfa, 0xa3])
-}
-
-pub fn get_gamepad_mode_report() -> Vec<u8> {
-    command_report(&[0xa5, 0x04, 0xd4, 0x7d])
-}
-
-pub fn build_set_logo_led_report(colors: [u8; 9]) -> Vec<u8> {
-    let mut logical = vec![0xa5, 0x0d, 0xf5];
-    logical.extend_from_slice(&colors);
-    logical.push(byte_sum(&logical));
-    command_report(&logical)
-}
-
-pub fn build_set_led_brightness_report(value: u8) -> Vec<u8> {
-    command_report(&[0xa5, 0x05, 0x72, value, value.wrapping_add(0x1c)])
-}
-
-pub fn build_set_lighting_mode_report(mode: u8) -> Vec<u8> {
-    command_report(&[0xa5, 0x05, 0x73, mode, mode.wrapping_add(0x1d)])
-}
-
 pub fn build_set_polling_rate_report(value: u8) -> Vec<u8> {
     command_report(&[0xa5, 0x05, 0xf6, value, value.wrapping_sub(0x60)])
 }
@@ -313,9 +254,7 @@ pub fn normalize_v37_profile(input: &[u8]) -> Result<Vec<u8>, String> {
     let stored = stored_profile_crc(profile)?;
     let computed = profile_crc(profile)?;
     if stored != computed {
-        return Err(format!(
-            "invalid profile CRC: stored {stored:04X}, computed {computed:04X}"
-        ));
+        return Err("プロファイルの内容を確認できないため、読み込めません".into());
     }
     Ok(profile.to_vec())
 }
@@ -551,6 +490,7 @@ fn write_curve(
         profile[block + 8] = (100 - curve.edge) as u8;
         profile[block + 9] = 100;
     }
+    profile[block + 0x0A] = curve.stabilization;
     Ok(())
 }
 
@@ -742,21 +682,6 @@ pub fn validate_macro_write_ack(report: &[u8]) -> Result<u8, String> {
     Ok(wire[3])
 }
 
-pub fn decode_uuid(report: &[u8]) -> Result<[u8; 8], String> {
-    let payload = short_command_payload(report, 0xef)?;
-    payload
-        .try_into()
-        .map_err(|_| "UUID response does not contain eight bytes".to_string())
-}
-
-pub fn decode_zkm(report: &[u8]) -> Result<u8, String> {
-    let payload = short_command_payload(report, 0x0b)?;
-    payload
-        .first()
-        .copied()
-        .ok_or_else(|| "ZKM response has no version byte".into())
-}
-
 pub fn wire_bytes(report: &[u8]) -> &[u8] {
     if report.first() == Some(&0) {
         &report[1..]
@@ -822,7 +747,7 @@ mod tests {
         assert!(
             normalize_v37_profile(&invalid)
                 .unwrap_err()
-                .contains("invalid profile CRC")
+                .contains("プロファイルの内容を確認できない")
         );
     }
 
@@ -906,7 +831,7 @@ mod tests {
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET] = 1;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 1] = 0x20;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 8] = 0x61;
-        profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 0x0A] = 0xff;
+        profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 0x0A] = 0x12;
         profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 1] = 0x20;
         profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 8] = 0x61;
 
@@ -951,6 +876,7 @@ mod tests {
         assert_eq!(settings.left_curve.point2_y, 70);
         assert_eq!(settings.left_curve.edge, -4);
         assert_eq!(settings.left_curve.stabilization, 0xff);
+        assert_eq!(profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 0x0A], 0xff);
         assert_eq!(profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 2], 0);
         assert_eq!(profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 3], 13);
         assert_eq!(profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 8], 100);
@@ -961,6 +887,8 @@ mod tests {
         assert_eq!(settings.right_curve.point2_x, 92);
         assert_eq!(settings.right_curve.point2_y, 71);
         assert_eq!(settings.right_curve.edge, 5);
+        assert_eq!(settings.right_curve.stabilization, 0);
+        assert_eq!(profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 0x0A], 0);
         assert_eq!(profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 2], 14);
         assert_eq!(profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 3], 0);
         assert_eq!(profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 8], 95);
@@ -1161,21 +1089,6 @@ mod tests {
         assert_eq!(
             validate_macro_write_ack(&[0, 0xa5, 5, 0xd8, 0, 0x82]),
             Ok(0)
-        );
-    }
-
-    #[test]
-    fn builds_auxiliary_led_setters() {
-        let logo = build_set_logo_led_report([0; 9]);
-        assert_eq!(wire_bytes(&logo)[..4], [0xa5, 0x0d, 0xf5, 0]);
-        assert_eq!(wire_bytes(&logo)[12], 0xa7);
-        assert_eq!(
-            &wire_bytes(&build_set_led_brightness_report(0x20))[..5],
-            [0xa5, 0x05, 0x72, 0x20, 0x3c,]
-        );
-        assert_eq!(
-            &wire_bytes(&build_set_lighting_mode_report(0x02))[..5],
-            [0xa5, 0x05, 0x73, 0x02, 0x1f,]
         );
     }
 

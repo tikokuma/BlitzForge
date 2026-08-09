@@ -16,11 +16,8 @@ pub struct DeviceSummary {
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSummary {
     device: DeviceSummary,
-    length: usize,
     stored_crc: String,
     computed_crc: String,
-    protocol_version: String,
-    head: String,
     vibration: VibrationSettingsSummary,
     settings: ControllerSettingsSummary,
     raw_profile: Vec<u8>,
@@ -52,7 +49,7 @@ pub struct CurveSettingsSummary {
     point2_x: u8,
     point2_y: u8,
     edge: i16,
-    stabilization: u8,
+    stabilization: i16,
 }
 
 #[derive(Clone, Serialize)]
@@ -142,6 +139,7 @@ pub struct CurveSettingsInput {
     point2_x: u8,
     point2_y: u8,
     edge: i16,
+    stabilization: i16,
 }
 
 #[derive(Serialize)]
@@ -149,7 +147,6 @@ pub struct CurveSettingsInput {
 pub struct ControllerSettingsWriteResult {
     device: DeviceSummary,
     settings: ControllerSettingsSummary,
-    head: String,
     crc: String,
     ack: String,
     ack_value: u8,
@@ -228,32 +225,6 @@ pub struct MacroWriteResult {
     ack_value: u8,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuxiliaryProbe {
-    name: String,
-    command: String,
-    response: Option<String>,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuxiliarySummary {
-    device: DeviceSummary,
-    uuid: Option<String>,
-    zkm: Option<u8>,
-    probes: Vec<AuxiliaryProbe>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AuxiliaryWriteResult {
-    device: DeviceSummary,
-    request: String,
-    response: Option<String>,
-}
-
 pub fn scan_device() -> Result<Option<DeviceSummary>, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     Ok(find_config_info(&api).map(summary))
@@ -287,15 +258,8 @@ fn build_profile_read(device: DeviceSummary, profile: Vec<u8>) -> Result<Profile
     Ok(ProfileRead {
         summary: ProfileSummary {
             device,
-            length: profile.len(),
             stored_crc: format!("{stored_crc:04X}"),
             computed_crc: format!("{computed_crc:04X}"),
-            protocol_version: if profile.len() == protocol::V37_PROFILE_LENGTH {
-                "37".into()
-            } else {
-                "unknown".into()
-            },
-            head: spaced_hex(&profile[..profile.len().min(32)]),
             vibration: vibration_summary(vibration),
             settings,
             raw_profile: profile.clone(),
@@ -313,12 +277,10 @@ pub fn set_vibration(
     let stored_crc = protocol::stored_profile_crc(&profile)?;
     let computed_crc = protocol::profile_crc(&profile)?;
     if stored_crc != computed_crc {
-        return Err(format!(
-            "refusing write: stored CRC {stored_crc:04X}, computed {computed_crc:04X}"
-        ));
+        return Err("プロファイルを確認できないため、保存できません".into());
     }
 
-    let settings = input.into_settings();
+    let settings = input.into_settings()?;
     let crc = protocol::set_vibration_settings(&mut profile, settings)?;
     let (device, ack, ack_value) = write_profile(&profile, &device_path)?;
     let vibration = vibration_summary(protocol::vibration_settings(&profile)?);
@@ -344,9 +306,7 @@ pub fn set_controller_settings(
     let stored_crc = protocol::stored_profile_crc(&profile)?;
     let computed_crc = protocol::profile_crc(&profile)?;
     if stored_crc != computed_crc {
-        return Err(format!(
-            "refusing write: stored CRC {stored_crc:04X}, computed {computed_crc:04X}"
-        ));
+        return Err("プロファイルを確認できないため、保存できません".into());
     }
 
     let ControllerSettingsInput {
@@ -360,8 +320,8 @@ pub fn set_controller_settings(
     protocol::set_controller_settings(
         &mut profile,
         rectangle_algorithm,
-        left_stick.into_curve(),
-        right_stick.into_curve(),
+        left_stick.into_curve("left stick")?,
+        right_stick.into_curve("right stick")?,
         key_bindings,
         protocol::RapidFireSettings {
             m1: rapid_fire.m1,
@@ -380,7 +340,6 @@ pub fn set_controller_settings(
         ControllerSettingsWriteResult {
             device,
             settings,
-            head: spaced_hex(&profile[..profile.len().min(32)]),
             crc: format!("{crc:04X}"),
             ack: spaced_hex(&ack),
             ack_value,
@@ -519,120 +478,6 @@ pub fn write_macro(slot: u8, raw_record: Vec<u8>) -> Result<MacroWriteResult, St
         ),
         ack: spaced_hex(&ack_wire[..usize::from(ack_wire[1])]),
         ack_value,
-    })
-}
-
-pub fn read_auxiliary() -> Result<AuxiliarySummary, String> {
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
-    let device_summary = summary(info);
-    let device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
-    let probes = [
-        ("UUID EF", protocol::get_uuid_report(), 0xef),
-        ("ZKM 0B", protocol::get_zkm_report(), 0x0b),
-        ("Device mode E1", protocol::get_device_mode_report(), 0xe1),
-        ("Power AD", protocol::get_power_report(), 0xad),
-        ("Wireless FA", protocol::get_wireless_flag_report(), 0xfa),
-        ("Gamepad mode D4", protocol::get_gamepad_mode_report(), 0xd4),
-        (
-            "Smart/trigger F8",
-            protocol::get_smart_trigger_report(),
-            0xf8,
-        ),
-        ("Logo LED F5", protocol::get_logo_led_report(), 0xf5),
-        (
-            "LED brightness 72",
-            protocol::get_led_brightness_report(),
-            0x72,
-        ),
-        ("LED show 70", protocol::get_led_show_report(), 0x70),
-        (
-            "Lighting mode 73",
-            protocol::get_lighting_mode_report(),
-            0x73,
-        ),
-    ];
-    let mut uuid = None;
-    let mut zkm = None;
-    let mut results = Vec::with_capacity(probes.len());
-    for (name, request, command) in probes {
-        match transact_short(&device, &request, command) {
-            Ok(response) => {
-                if command == 0xef {
-                    uuid = protocol::decode_uuid(&response)
-                        .ok()
-                        .map(|value| spaced_hex(&value));
-                } else if command == 0x0b {
-                    zkm = protocol::decode_zkm(&response).ok();
-                }
-                results.push(AuxiliaryProbe {
-                    name: name.into(),
-                    command: format!("0x{command:02X}"),
-                    response: Some(spaced_hex(&response)),
-                    error: None,
-                });
-            }
-            Err(error) => results.push(AuxiliaryProbe {
-                name: name.into(),
-                command: format!("0x{command:02X}"),
-                response: None,
-                error: Some(error),
-            }),
-        }
-    }
-    Ok(AuxiliarySummary {
-        device: device_summary,
-        uuid,
-        zkm,
-        probes: results,
-    })
-}
-
-pub fn write_auxiliary(kind: String, values: Vec<u8>) -> Result<AuxiliaryWriteResult, String> {
-    let report = match kind.as_str() {
-        "logo-led" => {
-            let colors: [u8; 9] = values
-                .try_into()
-                .map_err(|_| "logo-led requires exactly 9 bytes".to_string())?;
-            protocol::build_set_logo_led_report(colors)
-        }
-        "led-brightness" => {
-            let value = values
-                .first()
-                .copied()
-                .filter(|_| values.len() == 1)
-                .ok_or_else(|| "led-brightness requires exactly 1 byte".to_string())?;
-            protocol::build_set_led_brightness_report(value)
-        }
-        "lighting-mode" => {
-            let value = values
-                .first()
-                .copied()
-                .filter(|_| values.len() == 1)
-                .ok_or_else(|| "lighting-mode requires exactly 1 byte".to_string())?;
-            protocol::build_set_lighting_mode_report(value)
-        }
-        _ => return Err(format!("unsupported auxiliary write kind: {kind}")),
-    };
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
-    let device_summary = summary(info);
-    let device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
-    write_report(&device, &report)?;
-    let mut response = [0_u8; protocol::HID_REPORT_LENGTH];
-    let read = device
-        .read_timeout(&mut response, 300)
-        .map_err(|error| error.to_string())?;
-    Ok(AuxiliaryWriteResult {
-        device: device_summary,
-        request: spaced_hex(&protocol::wire_bytes(&report)),
-        response: (read > 0).then(|| spaced_hex(protocol::wire_bytes(&response[..read]))),
     })
 }
 
@@ -782,7 +627,7 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
             point2_x: settings.left_curve.point2_x,
             point2_y: settings.left_curve.point2_y,
             edge: settings.left_curve.edge,
-            stabilization: settings.left_curve.stabilization,
+            stabilization: signed_stabilization(settings.left_curve.stabilization),
         },
         right_stick: CurveSettingsSummary {
             center: settings.right_curve.center,
@@ -791,7 +636,7 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
             point2_x: settings.right_curve.point2_x,
             point2_y: settings.right_curve.point2_y,
             edge: settings.right_curve.edge,
-            stabilization: settings.right_curve.stabilization,
+            stabilization: signed_stabilization(settings.right_curve.stabilization),
         },
         rapid_fire: RapidFireSummary {
             m1: settings.rapid_fire.m1,
@@ -815,6 +660,10 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
             .map(|entry| entry.iter().map(|byte| format!("{byte:02X}")).collect())
             .collect(),
     })
+}
+
+fn signed_stabilization(raw: u8) -> i16 {
+    -i16::from(i8::from_ne_bytes([raw]))
 }
 
 fn macro_slot_summary(
@@ -914,7 +763,7 @@ mod live_tests {
 
     #[test]
     #[ignore = "requires a connected BIGBIG WON controller"]
-    fn live_macro_and_auxiliary_round_trip() {
+    fn live_macro_round_trip() {
         let macros = read_macros().expect("D5/D9 macro read");
         let slot0 = macros
             .slots
@@ -925,19 +774,6 @@ mod live_tests {
         assert!(!slot0.is_empty(), "slot 0 D9 record must be present");
         let written = write_macro(0, slot0).expect("D8/D9 same-content round trip");
         assert_eq!(written.ack_value, 0);
-        let auxiliary = read_auxiliary().expect("auxiliary HID probes");
-        assert!(
-            auxiliary
-                .probes
-                .iter()
-                .any(|probe| probe.command == "0xEF" && probe.response.is_some())
-        );
-        assert!(
-            auxiliary
-                .probes
-                .iter()
-                .any(|probe| probe.command == "0x0B" && probe.response.is_some())
-        );
     }
 
     #[test]
@@ -985,22 +821,68 @@ mod live_tests {
 }
 
 impl CurveSettingsInput {
-    fn into_curve(self) -> protocol::CurveSettings {
-        protocol::CurveSettings {
+    fn into_curve(self, label: &str) -> Result<protocol::CurveSettings, String> {
+        if !(-10..=10).contains(&self.stabilization) {
+            return Err(format!("{label} stabilization must be between -10 and 10"));
+        }
+        // The official UI uses the opposite sign from the firmware filter byte:
+        // UI +1 is serialized as signed -1 (0xFF).
+        let stabilization = (-self.stabilization) as i8;
+        Ok(protocol::CurveSettings {
             center: self.center,
             point1_x: self.point1_x,
             point1_y: self.point1_y,
             point2_x: self.point2_x,
             point2_y: self.point2_y,
             edge: self.edge,
-            stabilization: 0,
+            stabilization: stabilization.to_ne_bytes()[0],
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn curve_input(stabilization: i16) -> CurveSettingsInput {
+        CurveSettingsInput {
+            center: 0,
+            point1_x: 0,
+            point1_y: 0,
+            point2_x: 0,
+            point2_y: 0,
+            edge: 0,
+            stabilization,
         }
+    }
+
+    #[test]
+    fn accepts_official_stabilization_range_and_encodes_signed_byte() {
+        assert_eq!(curve_input(-10).into_curve("left").unwrap().stabilization, 0x0a);
+        assert_eq!(curve_input(0).into_curve("left").unwrap().stabilization, 0x00);
+        assert_eq!(curve_input(10).into_curve("left").unwrap().stabilization, 0xf6);
+    }
+
+    #[test]
+    fn rejects_stabilization_outside_official_range() {
+        assert!(curve_input(-11).into_curve("left").is_err());
+        assert!(curve_input(11).into_curve("left").is_err());
     }
 }
 
 impl VibrationSettingsInput {
-    fn into_settings(self) -> protocol::VibrationSettings {
-        protocol::VibrationSettings {
+    fn into_settings(self) -> Result<protocol::VibrationSettings, String> {
+        let off = self.left.min == 0
+            && self.left.max == 1
+            && self.right.min == 0
+            && self.right.max == 1;
+        let valid_width = |grip: &VibrationGripInput| {
+            grip.max >= grip.min && grip.max - grip.min >= 20
+        };
+        if !off && (!valid_width(&self.left) || !valid_width(&self.right)) {
+            return Err("カスタム振動は最小と最大の差を20以上にしてください".into());
+        }
+        Ok(protocol::VibrationSettings {
             left: protocol::VibrationGrip {
                 min: self.left.min,
                 max: self.left.max,
@@ -1009,7 +891,7 @@ impl VibrationSettingsInput {
                 min: self.right.min,
                 max: self.right.max,
             },
-        }
+        })
     }
 }
 
