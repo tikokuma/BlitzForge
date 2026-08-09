@@ -76,6 +76,11 @@ pub struct MacroListEntry {
     pub active_length: usize,
 }
 
+pub struct MacroInfoFragment {
+    pub sequence: u8,
+    pub payload: Vec<u8>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RapidFireTiming {
     pub period_ms: u16,
@@ -576,23 +581,94 @@ pub fn decode_macro_list(report: &[u8]) -> Result<Vec<MacroListEntry>, String> {
 
 pub fn decode_macro_info(report: &[u8]) -> Result<Vec<u8>, String> {
     let payload = short_command_payload(report, 0xd9)?;
-    if payload.len() < MACRO_HEADER_LENGTH {
-        return Err("D9 response does not contain a macro header".into());
+    validate_macro_record(payload)?;
+    Ok(payload.to_vec())
+}
+
+pub fn decode_macro_info_fragment(report: &[u8]) -> Result<MacroInfoFragment, String> {
+    let wire = wire_bytes(report);
+    if wire.len() < 5 || wire[0] != 0xa4 || wire[2] != 0xd9 {
+        return Err("unexpected long D9 response header".into());
+    }
+
+    let length = usize::from(wire[1]);
+    if !(5..=wire.len()).contains(&length) {
+        return Err(format!("invalid long D9 response length {length}"));
+    }
+    if byte_sum(&wire[..length - 1]) != wire[length - 1] {
+        return Err("invalid long D9 response checksum".into());
+    }
+
+    Ok(MacroInfoFragment {
+        sequence: wire[3],
+        payload: wire[4..length - 1].to_vec(),
+    })
+}
+
+pub fn macro_record_length(payload: &[u8]) -> Result<usize, String> {
+    if payload.len() < 4 {
+        return Err("D9 response does not contain a macro length".into());
     }
     let active_length = usize::from(u16::from_be_bytes([payload[2], payload[3]]));
-    if active_length != payload.len() {
-        return Err(format!(
-            "D9 response contains {} bytes but declares {active_length}",
-            payload.len()
-        ));
-    }
     if !(MACRO_HEADER_LENGTH..=MACRO_MAX_LENGTH).contains(&active_length)
         || !(active_length - MACRO_HEADER_LENGTH).is_multiple_of(MACRO_STEP_LENGTH)
     {
         return Err(format!("invalid D9 macro length 0x{active_length:04X}"));
     }
-    validate_macro_crc(payload)?;
-    Ok(payload.to_vec())
+    Ok(active_length)
+}
+
+pub fn validate_macro_record(record: &[u8]) -> Result<(), String> {
+    let active_length = macro_record_length(record)?;
+    if active_length != record.len() {
+        return Err(format!(
+            "D9 response contains {} bytes but declares {active_length}",
+            record.len()
+        ));
+    }
+    validate_macro_crc(record)
+}
+
+pub fn reassemble_macro_info_fragments(reports: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+    let first = reports
+        .first()
+        .ok_or_else(|| "D9 response did not contain any fragments".to_string())?;
+    let first_fragment = decode_macro_info_fragment(first)?;
+    if first_fragment.sequence != 1 {
+        return Err(format!(
+            "unexpected D9 fragment sequence {}, expected 1",
+            first_fragment.sequence
+        ));
+    }
+    let active_length = macro_record_length(&first_fragment.payload)?;
+
+    let mut record = Vec::with_capacity(active_length);
+    for (index, report) in reports.iter().enumerate() {
+        let fragment = decode_macro_info_fragment(report)?;
+        let expected_sequence = u8::try_from(index + 1)
+            .map_err(|_| "D9 response contains too many fragments".to_string())?;
+        if fragment.sequence != expected_sequence {
+            return Err(format!(
+                "unexpected D9 fragment sequence {}, expected {expected_sequence}",
+                fragment.sequence
+            ));
+        }
+        record.extend_from_slice(&fragment.payload);
+        if record.len() > active_length {
+            return Err(format!(
+                "D9 response contains more than the declared {active_length} bytes"
+            ));
+        }
+    }
+
+    if record.len() != active_length {
+        return Err(format!(
+            "D9 response contains {} bytes but declares {active_length}",
+            record.len()
+        ));
+    }
+    validate_macro_record(&record)?;
+    Ok(record)
 }
 
 pub fn normalize_macro_record(input: &[u8]) -> Result<Vec<u8>, String> {
@@ -646,7 +722,10 @@ pub fn validate_macro_crc(record: &[u8]) -> Result<(), String> {
 }
 
 fn validate_macro_input_masks(record: &[u8]) -> Result<(), String> {
-    for (step_index, step) in record[MACRO_HEADER_LENGTH..].chunks_exact(MACRO_STEP_LENGTH).enumerate() {
+    for (step_index, step) in record[MACRO_HEADER_LENGTH..]
+        .chunks_exact(MACRO_STEP_LENGTH)
+        .enumerate()
+    {
         let input_mask = u32::from_be_bytes([step[2], step[3], step[4], step[5]]);
         let left_direction = ((input_mask >> 24) & 0x0f) as u8;
         let right_direction = ((input_mask >> 28) & 0x0f) as u8;
@@ -761,14 +840,31 @@ mod tests {
         profile
     }
 
-    fn rapid_keys(
-        states: &[(usize, Option<bool>)],
-    ) -> [Option<bool>; V37_KEYMAP_ENTRY_COUNT] {
+    fn rapid_keys(states: &[(usize, Option<bool>)]) -> [Option<bool>; V37_KEYMAP_ENTRY_COUNT] {
         let mut keys = [None; V37_KEYMAP_ENTRY_COUNT];
         for &(slot, enabled) in states {
             keys[slot] = enabled;
         }
         keys
+    }
+
+    fn long_macro_info_reports(record: &[u8]) -> Vec<Vec<u8>> {
+        let payload_capacity = HID_REPORT_LENGTH - 1 - 5;
+        record
+            .chunks(payload_capacity)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let frame_length = chunk.len() + 5;
+                let mut report = vec![0; HID_REPORT_LENGTH];
+                report[1] = 0xa4;
+                report[2] = frame_length as u8;
+                report[3] = 0xd9;
+                report[4] = (index + 1) as u8;
+                report[5..5 + chunk.len()].copy_from_slice(chunk);
+                report[frame_length] = byte_sum(&report[1..frame_length]);
+                report
+            })
+            .collect()
     }
 
     #[test]
@@ -1114,6 +1210,24 @@ mod tests {
     }
 
     #[test]
+    fn reassembles_a_maximum_length_macro_info_response() {
+        let record = normalize_macro_record(&vec![0; MACRO_MAX_LENGTH]).unwrap();
+        let reports = long_macro_info_reports(&record);
+
+        assert_eq!(reports.len(), 12);
+        assert_eq!(reassemble_macro_info_fragments(&reports).unwrap(), record);
+    }
+
+    #[test]
+    fn rejects_a_missing_macro_info_fragment() {
+        let record = normalize_macro_record(&vec![0; MACRO_MAX_LENGTH]).unwrap();
+        let reports = long_macro_info_reports(&record);
+
+        let error = reassemble_macro_info_fragments(&reports[..11]).unwrap_err();
+        assert!(error.contains("contains 649 bytes but declares 650"));
+    }
+
+    #[test]
     fn rejects_invalid_macro_crc() {
         let mut record = normalize_macro_record(&[0; MACRO_HEADER_LENGTH]).unwrap();
         record[0] ^= 1;
@@ -1159,10 +1273,7 @@ mod tests {
             build_set_polling_rate_report(0x63)[1..6],
             [0xa5, 0x05, 0xf6, 0x63, 0x03]
         );
-        assert_eq!(
-            get_step_accuracy_report()[1..5],
-            [0xa5, 0x04, 0xf7, 0xa0]
-        );
+        assert_eq!(get_step_accuracy_report()[1..5], [0xa5, 0x04, 0xf7, 0xa0]);
         assert_eq!(
             build_set_step_accuracy_report(StepAccuracySettings {
                 mode: 1,

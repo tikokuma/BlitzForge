@@ -394,14 +394,68 @@ pub fn set_device_settings(
         extension: input.step_accuracy.extension,
     };
     let polling_report = protocol::build_set_polling_rate_report(input.polling_rate);
-    write_report(&device, &polling_report)?;
+    write_report(&device, &polling_report).map_err(|error| {
+        format!("F6 polling-rate write failed; F7 step-accuracy was not attempted: {error}")
+    })?;
+    let polling_response = transact_short(
+        &device,
+        &protocol::get_polling_rate_report(),
+        0xf6,
+    )
+    .map_err(|error| {
+        format!(
+            "F6 polling-rate write was sent but readback failed; F7 step-accuracy was not attempted: {error}"
+        )
+    })?;
+    let polling_rate = protocol::decode_polling_rate(&polling_response)
+    .map_err(|error| {
+        format!(
+            "F6 polling-rate write was sent but readback failed; F7 step-accuracy was not attempted: {error}"
+        )
+    })?;
+    if polling_rate != input.polling_rate {
+        return Err(format!(
+            "F6 polling-rate readback mismatch: requested {}, received {}; F7 step-accuracy was not attempted",
+            input.polling_rate, polling_rate
+        ));
+    }
+
     let step_accuracy_report = protocol::build_set_step_accuracy_report(step_accuracy);
-    write_report(&device, &step_accuracy_report)?;
+    write_report(&device, &step_accuracy_report).map_err(|error| {
+        format!(
+            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy write failed: {error}"
+        )
+    })?;
+    let step_accuracy_response = transact_short(
+        &device,
+        &protocol::get_step_accuracy_report(),
+        0xf7,
+    )
+    .map_err(|error| {
+        format!(
+            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy readback failed: {error}"
+        )
+    })?;
+    let readback_step_accuracy = protocol::decode_step_accuracy(&step_accuracy_response)
+    .map_err(|error| {
+        format!(
+            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy readback failed: {error}"
+        )
+    })?;
+    if readback_step_accuracy.mode != step_accuracy.mode
+        || readback_step_accuracy.value != step_accuracy.value
+        || readback_step_accuracy.extension != step_accuracy.extension
+    {
+        return Err(format!(
+            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy readback mismatched the requested value"
+        ));
+    }
+
     Ok(DeviceSettingsWriteResult {
         device: device_summary,
         settings: DeviceSettingsSummary {
-            polling_rate: input.polling_rate,
-            step_accuracy: step_accuracy_summary(step_accuracy),
+            polling_rate,
+            step_accuracy: step_accuracy_summary(readback_step_accuracy),
         },
         polling_command: spaced_hex(protocol::wire_bytes(&polling_report)),
         step_accuracy_command: spaced_hex(protocol::wire_bytes(&step_accuracy_report)),
@@ -422,8 +476,7 @@ pub fn read_macros(expected_device_path: &str) -> Result<MacroSummary, String> {
         let slot_u8 = slot as u8;
         let base = macro_slot_summary(slot_u8, entry.crc, entry.active_length, Vec::new(), None);
         match protocol::get_macro_info_report(slot_u8)
-            .and_then(|request| transact_short(&device, &request, 0xd9))
-            .and_then(|response| protocol::decode_macro_info(&response))
+            .and_then(|request| transact_macro_info(&device, &request))
         {
             Ok(record) => slots.push(macro_slot_summary(
                 slot_u8,
@@ -474,9 +527,7 @@ pub fn write_macro(
         return Err(format!("macro D8 returned status 0x{ack_value:02X}"));
     }
     let after_request = protocol::get_macro_info_report(slot)?;
-    let after_response = transact_short(&device, &after_request, 0xd9)?;
-    let after_record = protocol::decode_macro_info(&after_response)?;
-    protocol::validate_macro_crc(&after_record)?;
+    let after_record = transact_macro_info(&device, &after_request)?;
     if after_record != normalized {
         return Err("macro D9 readback does not match the normalized write data".into());
     }
@@ -578,12 +629,8 @@ fn write_profile(
     expected_device_path: &str,
 ) -> Result<(DeviceSummary, Vec<u8>, u8), String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let device_summary = summary(info);
-    if device_summary.path != expected_device_path {
-        return Err("the connected controller changed; read its profile before saving".into());
-    }
     let hid_device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -627,6 +674,63 @@ fn transact_short(device: &HidDevice, request: &[u8], command: u8) -> Result<Vec
         ));
     }
     Ok(wire.to_vec())
+}
+
+fn transact_macro_info(device: &HidDevice, request: &[u8]) -> Result<Vec<u8>, String> {
+    write_report(device, request)?;
+    let first = read_macro_info_report(device)?;
+    match first.first().copied() {
+        Some(0xa5) => protocol::decode_macro_info(&first),
+        Some(0xa4) => {
+            let first_fragment = protocol::decode_macro_info_fragment(&first)?;
+            if first_fragment.sequence != 1 {
+                return Err(format!(
+                    "unexpected D9 fragment sequence {}, expected 1",
+                    first_fragment.sequence
+                ));
+            }
+            let active_length = protocol::macro_record_length(&first_fragment.payload)?;
+            let mut received_length = first_fragment.payload.len();
+            let mut expected_sequence = 2_u8;
+            let mut reports = vec![first];
+
+            while received_length < active_length {
+                let report = read_macro_info_report(device)?;
+                let fragment = protocol::decode_macro_info_fragment(&report)?;
+                if fragment.sequence != expected_sequence {
+                    return Err(format!(
+                        "unexpected D9 fragment sequence {}, expected {expected_sequence}",
+                        fragment.sequence
+                    ));
+                }
+                received_length += fragment.payload.len();
+                if received_length > active_length {
+                    return Err(format!(
+                        "D9 response contains more than the declared {active_length} bytes"
+                    ));
+                }
+                reports.push(report);
+                expected_sequence = expected_sequence
+                    .checked_add(1)
+                    .ok_or_else(|| "D9 response contains too many fragments".to_string())?;
+            }
+
+            protocol::reassemble_macro_info_fragments(&reports)
+        }
+        Some(command) => Err(format!("unexpected D9 response header 0x{command:02X}")),
+        None => Err("D9 response was empty".into()),
+    }
+}
+
+fn read_macro_info_report(device: &HidDevice) -> Result<Vec<u8>, String> {
+    let mut response = [0_u8; protocol::HID_REPORT_LENGTH];
+    let read = device
+        .read_timeout(&mut response, SHORT_COMMAND_TIMEOUT_MS)
+        .map_err(|error| error.to_string())?;
+    if read == 0 {
+        return Err("command 0xD9 timed out".into());
+    }
+    Ok(protocol::wire_bytes(&response[..read]).to_vec())
 }
 
 fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String> {
@@ -747,9 +851,7 @@ fn parse_key_bindings(
 
     let mut bindings = [[0_u8; 4]; protocol::V37_KEYMAP_ENTRY_COUNT];
     for (index, value) in values.into_iter().enumerate() {
-        let compact = value
-            .trim()
-            .replace([' ', ':', '-'], "");
+        let compact = value.trim().replace([' ', ':', '-'], "");
         if compact.len() != 8 || !compact.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(format!(
                 "key binding {} must contain exactly 8 hexadecimal digits",
@@ -821,8 +923,8 @@ mod live_tests {
         assert_eq!(written.ack, "A5 05 D8 00 82");
         assert_eq!(written.slot.raw_record, expected_probe);
 
-        let restored = write_macro(&device_path, slot, original.clone())
-            .expect("D8 restore and D9 readback");
+        let restored =
+            write_macro(&device_path, slot, original.clone()).expect("D8 restore and D9 readback");
         println!(
             "restored slot={} ack={} raw={}",
             slot,
@@ -876,9 +978,18 @@ mod tests {
 
     #[test]
     fn accepts_official_stabilization_range_and_encodes_signed_byte() {
-        assert_eq!(curve_input(-10).into_curve("left").unwrap().stabilization, 0x0a);
-        assert_eq!(curve_input(0).into_curve("left").unwrap().stabilization, 0x00);
-        assert_eq!(curve_input(10).into_curve("left").unwrap().stabilization, 0xf6);
+        assert_eq!(
+            curve_input(-10).into_curve("left").unwrap().stabilization,
+            0x0a
+        );
+        assert_eq!(
+            curve_input(0).into_curve("left").unwrap().stabilization,
+            0x00
+        );
+        assert_eq!(
+            curve_input(10).into_curve("left").unwrap().stabilization,
+            0xf6
+        );
     }
 
     #[test]
@@ -890,13 +1001,10 @@ mod tests {
 
 impl VibrationSettingsInput {
     fn into_settings(self) -> Result<protocol::VibrationSettings, String> {
-        let off = self.left.min == 0
-            && self.left.max == 1
-            && self.right.min == 0
-            && self.right.max == 1;
-        let valid_width = |grip: &VibrationGripInput| {
-            grip.max >= grip.min && grip.max - grip.min >= 20
-        };
+        let off =
+            self.left.min == 0 && self.left.max == 1 && self.right.min == 0 && self.right.max == 1;
+        let valid_width =
+            |grip: &VibrationGripInput| grip.max >= grip.min && grip.max - grip.min >= 20;
         if !off && (!valid_width(&self.left) || !valid_width(&self.right)) {
             return Err("カスタム振動は最小と最大の差を20以上にしてください".into());
         }
@@ -922,10 +1030,10 @@ fn find_config_info_at_path<'a>(
     expected_device_path: &str,
 ) -> Result<&'a hidapi::DeviceInfo, String> {
     api.device_list()
-        .find(|info| {
-            is_config_info(info) && info.path().to_string_lossy() == expected_device_path
+        .find(|info| is_config_info(info) && info.path().to_string_lossy() == expected_device_path)
+        .ok_or_else(|| {
+            "the connected controller changed; read its profile before continuing".into()
         })
-        .ok_or_else(|| "the connected controller changed; read its profile before continuing".into())
 }
 
 fn is_config_info(info: &hidapi::DeviceInfo) -> bool {
