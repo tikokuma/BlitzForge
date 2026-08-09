@@ -20,6 +20,16 @@ struct AppState {
     cached_profile: Mutex<Option<CachedProfile>>,
 }
 
+fn cached_device_path(state: &AppState) -> Result<String, String> {
+    state
+        .cached_profile
+        .lock()
+        .map_err(|_| "profile cache lock was poisoned".to_string())?
+        .as_ref()
+        .map(|cached| cached.device_path.clone())
+        .ok_or_else(|| "read the profile before accessing the controller".to_string())
+}
+
 #[tauri::command]
 async fn scan_device() -> Result<Option<DeviceSummary>, String> {
     tauri::async_runtime::spawn_blocking(device::scan_device)
@@ -156,31 +166,61 @@ async fn set_controller_settings(
 }
 
 #[tauri::command]
-async fn read_device_settings() -> Result<DeviceSettingsSummary, String> {
-    tauri::async_runtime::spawn_blocking(device::read_device_settings)
+async fn read_device_settings(
+    state: tauri::State<'_, AppState>,
+    device_path: String,
+) -> Result<DeviceSettingsSummary, String> {
+    if cached_device_path(state.inner())? != device_path {
+        return Err("the displayed controller changed; reload its profile before continuing".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || device::read_device_settings(&device_path))
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 async fn set_device_settings(
+    state: tauri::State<'_, AppState>,
+    device_path: String,
     settings: DeviceSettingsInput,
 ) -> Result<DeviceSettingsWriteResult, String> {
-    tauri::async_runtime::spawn_blocking(move || device::set_device_settings(settings))
+    if cached_device_path(state.inner())? != device_path {
+        return Err("the displayed controller changed; reload its profile before saving".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        device::set_device_settings(&device_path, settings)
+    })
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-async fn read_macros() -> Result<MacroSummary, String> {
-    tauri::async_runtime::spawn_blocking(device::read_macros)
+async fn read_macros(
+    state: tauri::State<'_, AppState>,
+    device_path: String,
+) -> Result<MacroSummary, String> {
+    if cached_device_path(state.inner())? != device_path {
+        return Err("the displayed controller changed; reload its profile before reading macros".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || device::read_macros(&device_path))
         .await
         .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-async fn write_macro(slot: u8, raw_record: Vec<u8>) -> Result<MacroWriteResult, String> {
-    tauri::async_runtime::spawn_blocking(move || device::write_macro(slot, raw_record))
+async fn write_macro(
+    state: tauri::State<'_, AppState>,
+    device_path: String,
+    slot: u8,
+    raw_record: Vec<u8>,
+) -> Result<MacroWriteResult, String> {
+    let cached_path = cached_device_path(state.inner())?;
+    if cached_path != device_path {
+        return Err("the displayed controller changed; reload its profile before writing".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        device::write_macro(&device_path, slot, raw_record)
+    })
         .await
         .map_err(|error| error.to_string())?
 }

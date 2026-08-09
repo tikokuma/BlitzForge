@@ -11,7 +11,11 @@ Production replacement for the BIGBIG WON settings application.
 - One `D6` per explicit profile read; the validated profile and HID path are cached, so setting saves use `D7` without another `D6` or automatic read-back
 - On a read timeout, one read-only `D3` health probe distinguishes a dead interface from the observed large-transfer-path failure without flooding the firmware
 
-The C# project remains a reverse-engineering prototype. Protocol details are documented in `../../docs/BIGBIGWON_HID_PROTOCOL.md`.
+## Scope
+
+LED control is intentionally not implemented. This is a deliberate scope decision, not an omitted feature.
+
+The C# project remains a reverse-engineering prototype. Protocol details are documented in `BIGBIGWON_HID_PROTOCOL.md`.
 
 ```powershell
 npm install

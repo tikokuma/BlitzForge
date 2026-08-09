@@ -19,10 +19,7 @@ type CurveSettings = {
 };
 
 type RapidFireSettings = {
-  m1: boolean | null;
-  m2: boolean | null;
-  m3: boolean | null;
-  m4: boolean | null;
+  keys: Array<boolean | null>;
   speedIndex: number | null;
   timing?: { periodMs: number; halfPeriodMs: number; hz: number } | null;
 };
@@ -63,10 +60,7 @@ type ControllerSettingsInput = {
   leftStick: CurveSettings;
   rightStick: CurveSettings;
   rapidFire: {
-    m1: boolean | null;
-    m2: boolean | null;
-    m3: boolean | null;
-    m4: boolean | null;
+    keys: Array<boolean | null>;
     speedIndex: number | null;
   };
   keyBindings: string[];
@@ -163,6 +157,8 @@ const curveRangeIds = [
   "curve-edge",
   "curve-stabilization",
 ] as const;
+
+const KEYMAP_SLOT_COUNT = 32;
 
 const KEYMAP_TARGET_LABELS = [
   "A", "B", "C", "X", "Y", "Z", "L1", "R1",
@@ -294,6 +290,9 @@ const MACRO_INPUT_OPTIONS = [
   ["LT", 0x00000080], ["RB", 0x00000200], ["RT", 0x00002000], ["L3 / R3", 0x00004000],
 ] as const;
 
+const MACRO_DIRECTION_GROUP_MASKS = [0x0f000000, 0xf0000000] as const;
+const MACRO_MAX_STEPS = 64;
+
 type MacroStep = {
   durationMs: number;
   marker: boolean;
@@ -322,8 +321,11 @@ let curveDrafts: Record<Stick, CurveSettings> = {
   leftStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
   rightStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
 };
-let rapidFireDraft: RapidFireSettings = { m1: null, m2: null, m3: null, m4: null, speedIndex: null };
-let keymapDraft: string[] = Array.from({ length: 32 }, () => KEYMAP_DEFAULT_ENTRY);
+let rapidFireDraft: RapidFireSettings = {
+  keys: Array.from({ length: KEYMAP_SLOT_COUNT }, () => null),
+  speedIndex: null,
+};
+let keymapDraft: string[] = Array.from({ length: KEYMAP_SLOT_COUNT }, () => KEYMAP_DEFAULT_ENTRY);
 let activeKeymapSlot: number | null = null;
 let pendingKeymapChoice: KeymapChoice | null = null;
 let macroSummary: MacroSummary | null = null;
@@ -358,9 +360,9 @@ function syncActions() {
   byId<HTMLButtonElement>("save-vibration").disabled = busy || !currentProfile || !vibrationDirty;
   byId<HTMLButtonElement>("refresh-device-settings").disabled = busy || !currentProfile;
   byId<HTMLButtonElement>("save-device-settings").disabled = busy || !currentProfile || !deviceSettingsDirty;
-  byId<HTMLButtonElement>("refresh-macros").disabled = busy || !deviceConnected;
-  byId<HTMLButtonElement>("add-macro-step").disabled = busy || !macroDraftRecord || (macroDraftRecord.length - 10) / 10 >= 64;
-  byId<HTMLButtonElement>("write-macro").disabled = busy || !deviceConnected || !macroDraftRecord;
+  byId<HTMLButtonElement>("refresh-macros").disabled = busy || !deviceConnected || !currentProfile;
+  byId<HTMLButtonElement>("add-macro-step").disabled = busy || !macroDraftRecord || (macroDraftRecord.length - 10) / 10 >= MACRO_MAX_STEPS;
+  byId<HTMLButtonElement>("write-macro").disabled = busy || !currentProfile || !macroDraftRecord;
 }
 
 function renderDetails(id: string, rows: Array<[string, string]>) {
@@ -426,12 +428,13 @@ function renderProfile(profile: ProfileSummary) {
     ? "プロファイル読み込み済み"
     : "プロファイルを確認してください";
   const rapid = profile.settings.rapidFire;
-  const rapidState = [rapid.m1, rapid.m2, rapid.m3, rapid.m4]
-    .map((value, index) => `M${index + 1}: ${value === null ? "不明" : value ? "有効" : "無効"}`)
-    .join(" / ");
-  const timing = rapid.timing
-    ? `${rapid.timing.hz}回/秒`
-    : rapid.speedIndex === null ? "不明" : "設定済み";
+  const rapidButtons = KEYMAP_VISIBLE_SOURCES
+    .filter(({ slot }) => rapid.keys[slot] === true)
+    .map(({ label }) => label);
+  const rapidState = rapidButtons.length === 0 ? "なし" : `${rapidButtons.join(" / ")} 有効`;
+  const timing = profile.settings.rapidFireTiming
+    ? `${profile.settings.rapidFireTiming.hz}回/秒`
+    : profile.settings.rapidFireSpeedIndex === null ? "不明" : "設定済み";
   const changedKeymaps = profile.settings.keyBindings
     .filter((entry) => entry.toUpperCase() !== KEYMAP_DEFAULT_ENTRY)
     .length;
@@ -663,27 +666,23 @@ function keymapDisplay(raw: string, sourceSlot: number): { label: string; detail
 }
 
 function rapidFireForSlot(slot: number): boolean | null {
-  if (slot === 23) return rapidFireDraft.m1;
-  if (slot === 24) return rapidFireDraft.m2;
-  if (slot === 25) return rapidFireDraft.m3;
-  if (slot === 26) return rapidFireDraft.m4;
-  return null;
-}
-
-function rapidFireKeyForSlot(slot: number): "m1" | "m2" | "m3" | "m4" | null {
-  if (slot === 23) return "m1";
-  if (slot === 24) return "m2";
-  if (slot === 25) return "m3";
-  if (slot === 26) return "m4";
-  return null;
+  return rapidFireDraft.keys[slot] ?? null;
 }
 
 function toggleRapidFire(slot: number) {
-  const key = rapidFireKeyForSlot(slot);
-  if (!key || rapidFireDraft[key] === null) return;
-  rapidFireDraft[key] = !rapidFireDraft[key];
+  const state = rapidFireForSlot(slot);
+  if (state === null) return;
+  rapidFireDraft.keys[slot] = !state;
   renderKeymapRows();
   renderRapidFireControls(rapidFireDraft);
+  markSettingsDirty();
+}
+
+function resetKeymapSlot(slot: number) {
+  if (keymapDraft[slot] === KEYMAP_DEFAULT_ENTRY) return;
+  keymapDraft[slot] = KEYMAP_DEFAULT_ENTRY;
+  renderKeymapRows();
+  updateKeymapSummary();
   markSettingsDirty();
 }
 
@@ -725,6 +724,9 @@ function renderKeymapRows() {
       const mapping = keymapDisplay(keymapDraft[slot] ?? KEYMAP_DEFAULT_ENTRY, slot);
       const mappingButton = document.createElement("button");
       mappingButton.className = "keymap-mapping";
+      if (mapping.choice && mapping.choice.kind !== "identity") {
+        mappingButton.classList.add("keymap-mapping-configured");
+      }
       mappingButton.type = "button";
       mappingButton.textContent = mapping.label;
       mappingButton.dataset.keymapSlot = String(slot);
@@ -738,11 +740,19 @@ function renderKeymapRows() {
       mappingHint.className = "keymap-hint keymap-mapping-hint";
       mappingHint.textContent = mapping.detail;
       mappingCell.append(mappingHint);
+      if (keymapDraft[slot] !== KEYMAP_DEFAULT_ENTRY) {
+        const resetButton = document.createElement("button");
+        resetButton.type = "button";
+        resetButton.className = "keymap-reset";
+        resetButton.textContent = "デフォルトに戻す";
+        resetButton.setAttribute("aria-label", `${label} のバインドをデフォルトに戻す`);
+        resetButton.addEventListener("click", () => resetKeymapSlot(slot));
+        mappingCell.append(resetButton);
+      }
 
       const rapidState = rapidFireForSlot(slot);
-      const rapidKey = rapidFireKeyForSlot(slot);
-      const rapid = document.createElement(rapidKey ? "button" : "span");
-      rapid.className = rapidKey ? "keymap-rapid keymap-rapid-toggle" : "keymap-rapid";
+      const rapid = document.createElement(rapidState === null ? "span" : "button");
+      rapid.className = rapidState === null ? "keymap-rapid" : "keymap-rapid keymap-rapid-toggle";
       if (rapid instanceof HTMLButtonElement) {
         rapid.type = "button";
         rapid.disabled = rapidState === null;
@@ -770,8 +780,11 @@ function updateKeymapSummary() {
 }
 
 function renderKeymap(keyBindings: string[], rapidFire: RapidFireSettings) {
-  rapidFireDraft = { ...rapidFire };
-  keymapDraft = Array.from({ length: 32 }, (_, index) => normalizeKeymapEntry(keyBindings[index] ?? KEYMAP_DEFAULT_ENTRY));
+  rapidFireDraft = {
+    ...rapidFire,
+    keys: Array.from({ length: KEYMAP_SLOT_COUNT }, (_, index) => rapidFire.keys[index] ?? null),
+  };
+  keymapDraft = Array.from({ length: KEYMAP_SLOT_COUNT }, (_, index) => normalizeKeymapEntry(keyBindings[index] ?? KEYMAP_DEFAULT_ENTRY));
   renderKeymapRows();
   updateKeymapSummary();
 }
@@ -781,17 +794,6 @@ function readKeymap(): string[] {
 }
 
 function renderRapidFireControls(settings: RapidFireSettings) {
-  for (const [key, id] of [
-    ["m1", "rapid-m1"],
-    ["m2", "rapid-m2"],
-    ["m3", "rapid-m3"],
-    ["m4", "rapid-m4"],
-  ] as const) {
-    const input = byId<HTMLInputElement>(id);
-    const value = settings[key];
-    input.checked = value === true;
-    input.disabled = value === null;
-  }
   const speed = byId<HTMLSelectElement>("rapid-speed");
   speed.querySelector("option[data-generated]")?.remove();
   if (settings.speedIndex !== null && settings.speedIndex !== undefined
@@ -852,9 +854,40 @@ function updateMacroStep(record: number[], index: number, changes: Partial<Macro
   record.splice(offset, 10, ...step);
 }
 
+function macroDirectionGroup(optionMask: number): { mask: number } | null {
+  const normalized = optionMask >>> 0;
+  const mask = MACRO_DIRECTION_GROUP_MASKS.find((candidate) =>
+    (((normalized & candidate) >>> 0) === normalized));
+  return mask === undefined ? null : { mask };
+}
+
+function macroInputOptionActive(inputMask: number, optionMask: number): boolean {
+  const normalized = inputMask >>> 0;
+  const group = macroDirectionGroup(optionMask);
+  if (group) {
+    return (((normalized & group.mask) >>> 0) === optionMask);
+  }
+  return (((normalized & optionMask) >>> 0) === optionMask);
+}
+
+function toggleMacroInput(inputMask: number, optionMask: number): number {
+  const normalized = inputMask >>> 0;
+  const group = macroDirectionGroup(optionMask);
+  if (!group) {
+    return (((normalized & optionMask) >>> 0) === optionMask
+      ? normalized & (~optionMask >>> 0)
+      : normalized | optionMask) >>> 0;
+  }
+
+  const withoutDirection = normalized & (~group.mask >>> 0);
+  return (((normalized & group.mask) >>> 0) === optionMask
+    ? withoutDirection
+    : (withoutDirection | optionMask)) >>> 0;
+}
+
 function macroInputLabels(mask: number): string[] {
   return MACRO_INPUT_OPTIONS
-    .filter(([, optionMask]) => ((((mask >>> 0) & optionMask) >>> 0) === optionMask))
+    .filter(([, optionMask]) => macroInputOptionActive(mask, optionMask))
     .map(([label]) => label);
 }
 
@@ -1004,15 +1037,13 @@ function renderMacroSteps(record: number[] | null) {
       const key = document.createElement("button");
       key.type = "button";
       key.className = "macro-key-toggle";
-      const active = ((((step.inputMask >>> 0) & mask) >>> 0) === mask);
+      const active = macroInputOptionActive(step.inputMask, mask);
       key.classList.toggle("active", active);
       key.setAttribute("aria-pressed", String(active));
       key.textContent = label;
       key.addEventListener("click", () => {
         const current = readMacroStep(macroDraftRecord ?? record, index);
-        const nextMask = active
-          ? ((current.inputMask & ~mask) >>> 0)
-          : ((current.inputMask | mask) >>> 0);
+        const nextMask = toggleMacroInput(current.inputMask, mask);
         commitMacroStep(index, { inputMask: nextMask });
       });
       keyGrid.append(key);
@@ -1051,7 +1082,7 @@ function renderMacroSteps(record: number[] | null) {
 
 function addMacroStep() {
   if (!macroDraftRecord) return;
-  if (macroStepCount(macroDraftRecord) >= 64) {
+  if (macroStepCount(macroDraftRecord) >= MACRO_MAX_STEPS) {
     setMessage("マクロは最大64ステップです。");
     return;
   }
@@ -1096,10 +1127,11 @@ function renderMacroSummary(summary: MacroSummary) {
 }
 
 async function refreshMacros() {
-  if (!deviceConnected) return;
+  const profile = currentProfile;
+  if (!deviceConnected || !profile) return;
   setBusy(true, "マクロの4枠を読み込んでいます…");
   try {
-    renderMacroSummary(await invoke<MacroSummary>("read_macros"));
+    renderMacroSummary(await invoke<MacroSummary>("read_macros", { devicePath: profile.device.path }));
     setMessage("マクロ4枠を読み込みました。");
   } catch (error) {
     byId("macro-output").textContent = errorMessage(error);
@@ -1110,7 +1142,8 @@ async function refreshMacros() {
 }
 
 async function writeMacro() {
-  if (!deviceConnected) return;
+  const profile = currentProfile;
+  if (!deviceConnected || !profile) return;
   try {
     const slot = Number(byId<HTMLSelectElement>("macro-slot").value);
     if (!macroDraftRecord) {
@@ -1120,7 +1153,11 @@ async function writeMacro() {
     syncFriendlyMacroHeader(record);
     macroDraftRecord = record;
     setBusy(true, `マクロ スロット${slot + 1}を保存し、実機で読み返しています…`);
-    const result = await invoke<MacroWriteResult>("write_macro", { slot, rawRecord: record });
+    const result = await invoke<MacroWriteResult>("write_macro", {
+      devicePath: profile.device.path,
+      slot,
+      rawRecord: record,
+    });
     if (macroSummary) {
       macroSummary = {
         ...macroSummary,
@@ -1399,10 +1436,7 @@ function readSettingsInput(): ControllerSettingsInput {
     leftStick: cloneCurve(curveDrafts.leftStick),
     rightStick: cloneCurve(curveDrafts.rightStick),
     rapidFire: {
-      m1: rapidFireDraft.m1,
-      m2: rapidFireDraft.m2,
-      m3: rapidFireDraft.m3,
-      m4: rapidFireDraft.m4,
+      keys: [...rapidFireDraft.keys],
       speedIndex: rapidFireDraft.speedIndex ?? null,
     },
     keyBindings: readKeymap(),
@@ -1423,10 +1457,8 @@ function settingsEqual(settings: ControllerSettings, input: ControllerSettingsIn
   return settings.rectangleAlgorithm === input.rectangleAlgorithm
     && curvesEqual(settings.leftStick, input.leftStick)
     && curvesEqual(settings.rightStick, input.rightStick)
-    && settings.rapidFire.m1 === input.rapidFire.m1
-    && settings.rapidFire.m2 === input.rapidFire.m2
-    && settings.rapidFire.m3 === input.rapidFire.m3
-    && settings.rapidFire.m4 === input.rapidFire.m4
+    && settings.rapidFire.keys.length === input.rapidFire.keys.length
+    && settings.rapidFire.keys.every((value, index) => value === input.rapidFire.keys[index])
     && settings.rapidFireSpeedIndex === input.rapidFire.speedIndex
     && settings.keyBindings.length === input.keyBindings.length
     && settings.keyBindings.every((value, index) => value.toUpperCase() === input.keyBindings[index].toUpperCase());
@@ -1515,7 +1547,7 @@ function setupDraggablePoint(id: string, point: CurvePoint) {
   circle.addEventListener("pointercancel", stopDragging);
 }
 
-function renderSettings(profile: ProfileSummary) {
+function renderControllerSettings(profile: ProfileSummary) {
   const settings = profile.settings;
   curveDrafts = {
     leftStick: cloneCurve(settings.leftStick),
@@ -1532,12 +1564,20 @@ function renderSettings(profile: ProfileSummary) {
   byId<HTMLInputElement>("rectangle-algorithm").checked = settings.rectangleAlgorithm;
   setActiveCurve(cloneCurve(curveDrafts.leftStick));
   selectStick("leftStick");
-  setVibrationControls(profile.vibration);
   settingsDirty = false;
-  vibrationDirty = false;
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
   updateCurvePreview();
+}
+
+function renderVibrationSettings(profile: ProfileSummary) {
+  setVibrationControls(profile.vibration);
+  vibrationDirty = false;
+}
+
+function renderSettings(profile: ProfileSummary) {
+  renderControllerSettings(profile);
+  renderVibrationSettings(profile);
   syncActions();
 }
 
@@ -1561,7 +1601,6 @@ function showView(view: "home" | "settings") {
   byId("settings-view").hidden = !settingsVisible;
   byId("message").hidden = !settingsVisible;
   if (settingsVisible && currentProfile) {
-    renderSettings(currentProfile);
     selectSettingsTab("stick");
   }
 }
@@ -1610,7 +1649,7 @@ async function readProfile(openSettings = false) {
     renderProfile(profile);
     renderSettings(profile);
     try {
-      await refreshDeviceSettings();
+      applyDeviceSettings(await fetchDeviceSettings(profile.device.path));
       setMessage(profile.storedCrc === profile.computedCrc
         ? "プロファイルを読み込みました。"
         : "プロファイルを読み込みましたが、内容を確認できません。保存はできません。");
@@ -1621,6 +1660,9 @@ async function readProfile(openSettings = false) {
       showView("settings");
     }
   } catch (error) {
+    if (openSettings) {
+      byId("message").hidden = false;
+    }
     setMessage(errorMessage(error));
   } finally {
     setBusy(false);
@@ -1684,14 +1726,31 @@ async function applyProfile() {
   }
 }
 
-async function refreshDeviceSettings() {
-  const settings = await invoke<DeviceSettings>("read_device_settings");
+function applyDeviceSettings(settings: DeviceSettings) {
   currentDeviceSettings = cloneDeviceSettings(settings);
   deviceSettingsDraft = cloneDeviceSettings(settings);
   setDeviceSettingsControls(deviceSettingsDraft);
   deviceSettingsDirty = false;
   byId("device-dirty").hidden = true;
   syncActions();
+}
+
+async function fetchDeviceSettings(devicePath: string): Promise<DeviceSettings> {
+  return invoke<DeviceSettings>("read_device_settings", { devicePath });
+}
+
+async function refreshDeviceSettings() {
+  const profile = currentProfile;
+  if (!profile || !deviceConnected || busy) return;
+  setBusy(true, "デバイス設定を読み込んでいます…");
+  try {
+    applyDeviceSettings(await fetchDeviceSettings(profile.device.path));
+    setMessage("デバイス設定を読み込みました。");
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function saveSettings() {
@@ -1710,7 +1769,8 @@ async function saveSettings() {
       rawProfile: result.rawProfile,
     };
     renderProfile(currentProfile);
-    renderSettings(currentProfile);
+    renderControllerSettings(currentProfile);
+    syncActions();
     setMessage("コントローラー設定を保存しました。");
   } catch (error) {
     setMessage(errorMessage(error));
@@ -1735,7 +1795,8 @@ async function saveVibration() {
       rawProfile: result.rawProfile,
     };
     renderProfile(currentProfile);
-    renderSettings(currentProfile);
+    renderVibrationSettings(currentProfile);
+    syncActions();
     setMessage("バイブレーションを保存しました。");
   } catch (error) {
     setMessage(errorMessage(error));
@@ -1750,7 +1811,10 @@ async function saveDeviceSettings() {
   const settings = readDeviceSettings();
   setBusy(true, "ポーリングレートとステップ精度を保存しています…");
   try {
-    const result = await invoke<DeviceSettingsWriteResult>("set_device_settings", { settings });
+    const result = await invoke<DeviceSettingsWriteResult>("set_device_settings", {
+      devicePath: profile.device.path,
+      settings,
+    });
     currentDeviceSettings = cloneDeviceSettings(result.settings);
     deviceSettingsDraft = cloneDeviceSettings(result.settings);
     setDeviceSettingsControls(deviceSettingsDraft);
@@ -1791,18 +1855,6 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("tab-device").addEventListener("click", () => selectSettingsTab("device"));
   byId("tab-vibration").addEventListener("click", () => selectSettingsTab("vibration"));
   byId("tab-macro").addEventListener("click", () => selectSettingsTab("macro"));
-  for (const [key, id] of [
-    ["m1", "rapid-m1"],
-    ["m2", "rapid-m2"],
-    ["m3", "rapid-m3"],
-    ["m4", "rapid-m4"],
-  ] as const) {
-    byId<HTMLInputElement>(id).addEventListener("change", (event) => {
-      rapidFireDraft[key] = (event.target as HTMLInputElement).checked;
-      renderKeymapRows();
-      markSettingsDirty();
-    });
-  }
   byId<HTMLSelectElement>("rapid-speed").addEventListener("change", (event) => {
     const value = (event.target as HTMLSelectElement).value;
     rapidFireDraft.speedIndex = value === "unknown" ? null : Number(value);

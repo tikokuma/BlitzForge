@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::protocol;
 
+const PROFILE_READ_TIMEOUT_MS: i32 = 5_000;
+const PROFILE_SIZE_TIMEOUT_MS: i32 = 500;
+const SHORT_COMMAND_TIMEOUT_MS: i32 = 1_000;
+const ACK_TIMEOUT_MS: i32 = 2_000;
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSummary {
@@ -78,10 +83,7 @@ pub struct ControllerSettingsInput {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RapidFireSummary {
-    m1: Option<bool>,
-    m2: Option<bool>,
-    m3: Option<bool>,
-    m4: Option<bool>,
+    keys: Vec<Option<bool>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -95,10 +97,8 @@ pub struct RapidFireTimingSummary {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RapidFireInput {
-    m1: Option<bool>,
-    m2: Option<bool>,
-    m3: Option<bool>,
-    m4: Option<bool>,
+    #[serde(default)]
+    keys: Vec<Option<bool>>,
     speed_index: Option<u8>,
 }
 
@@ -317,6 +317,16 @@ pub fn set_controller_settings(
         rapid_fire,
     } = input;
     let key_bindings = parse_key_bindings(key_bindings)?;
+    if rapid_fire.keys.len() > protocol::V37_KEYMAP_ENTRY_COUNT {
+        return Err(format!(
+            "rapid-fire state must contain at most {} buttons",
+            protocol::V37_KEYMAP_ENTRY_COUNT
+        ));
+    }
+    let mut rapid_keys = [None; protocol::V37_KEYMAP_ENTRY_COUNT];
+    for (slot, enabled) in rapid_fire.keys.into_iter().enumerate() {
+        rapid_keys[slot] = enabled;
+    }
     protocol::set_controller_settings(
         &mut profile,
         rectangle_algorithm,
@@ -324,10 +334,7 @@ pub fn set_controller_settings(
         right_stick.into_curve("right stick")?,
         key_bindings,
         protocol::RapidFireSettings {
-            m1: rapid_fire.m1,
-            m2: rapid_fire.m2,
-            m3: rapid_fire.m3,
-            m4: rapid_fire.m4,
+            keys: rapid_keys,
             speed_index: rapid_fire.speed_index,
         },
     )?;
@@ -349,10 +356,9 @@ pub fn set_controller_settings(
     ))
 }
 
-pub fn read_device_settings() -> Result<DeviceSettingsSummary, String> {
+pub fn read_device_settings(expected_device_path: &str) -> Result<DeviceSettingsSummary, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -373,11 +379,11 @@ pub fn read_device_settings() -> Result<DeviceSettingsSummary, String> {
 }
 
 pub fn set_device_settings(
+    expected_device_path: &str,
     input: DeviceSettingsInput,
 ) -> Result<DeviceSettingsWriteResult, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let device_summary = summary(info);
     let device = api
         .open_path(info.path())
@@ -397,15 +403,14 @@ pub fn set_device_settings(
             polling_rate: input.polling_rate,
             step_accuracy: step_accuracy_summary(step_accuracy),
         },
-        polling_command: spaced_hex(&protocol::wire_bytes(&polling_report)),
-        step_accuracy_command: spaced_hex(&protocol::wire_bytes(&step_accuracy_report)),
+        polling_command: spaced_hex(protocol::wire_bytes(&polling_report)),
+        step_accuracy_command: spaced_hex(protocol::wire_bytes(&step_accuracy_report)),
     })
 }
 
-pub fn read_macros() -> Result<MacroSummary, String> {
+pub fn read_macros(expected_device_path: &str) -> Result<MacroSummary, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let device_summary = summary(info);
     let device = api
         .open_path(info.path())
@@ -440,21 +445,25 @@ pub fn read_macros() -> Result<MacroSummary, String> {
     })
 }
 
-pub fn write_macro(slot: u8, raw_record: Vec<u8>) -> Result<MacroWriteResult, String> {
+pub fn write_macro(
+    expected_device_path: &str,
+    slot: u8,
+    raw_record: Vec<u8>,
+) -> Result<MacroWriteResult, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info(&api)
-        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
     let device_summary = summary(info);
     let device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
     let normalized = protocol::normalize_macro_record(&raw_record)?;
+    protocol::validate_macro_crc(&normalized)?;
     for report in protocol::build_macro_write_reports(slot, &normalized)? {
         write_report(&device, &report)?;
     }
     let mut ack = [0_u8; protocol::HID_REPORT_LENGTH];
     let read = device
-        .read_timeout(&mut ack, 2_000)
+        .read_timeout(&mut ack, ACK_TIMEOUT_MS)
         .map_err(|error| error.to_string())?;
     if read == 0 {
         return Err("timed out waiting for macro D8 ACK".into());
@@ -467,6 +476,10 @@ pub fn write_macro(slot: u8, raw_record: Vec<u8>) -> Result<MacroWriteResult, St
     let after_request = protocol::get_macro_info_report(slot)?;
     let after_response = transact_short(&device, &after_request, 0xd9)?;
     let after_record = protocol::decode_macro_info(&after_response)?;
+    protocol::validate_macro_crc(&after_record)?;
+    if after_record != normalized {
+        return Err("macro D9 readback does not match the normalized write data".into());
+    }
     Ok(MacroWriteResult {
         device: device_summary,
         slot: macro_slot_summary(
@@ -499,7 +512,7 @@ fn read_profile_once() -> Result<(DeviceSummary, Vec<u8>), String> {
     for expected_sequence in 1..=16_u8 {
         let mut report = [0_u8; protocol::HID_REPORT_LENGTH];
         let read = device
-            .read_timeout(&mut report, 2_000)
+            .read_timeout(&mut report, PROFILE_READ_TIMEOUT_MS)
             .map_err(|error| error.to_string())?;
         if read == 0 {
             let received_fragments = expected_sequence - 1;
@@ -520,11 +533,11 @@ fn read_profile_once() -> Result<(DeviceSummary, Vec<u8>), String> {
         }
         profile.extend_from_slice(&fragment.payload);
 
-        if let Some(length) = protocol::declared_profile_length(&profile) {
-            if profile.len() >= length {
-                profile.truncate(length);
-                return Ok((summary, profile));
-            }
+        if let Some(length) = protocol::declared_profile_length(&profile)
+            && profile.len() >= length
+        {
+            profile.truncate(length);
+            return Ok((summary, profile));
         }
     }
     Err("profile did not complete within 16 reports".into())
@@ -552,7 +565,7 @@ fn read_profile_size() -> Result<usize, String> {
 
     let mut report = [0_u8; protocol::HID_REPORT_LENGTH];
     let read = device
-        .read_timeout(&mut report, 500)
+        .read_timeout(&mut report, PROFILE_SIZE_TIMEOUT_MS)
         .map_err(|error| error.to_string())?;
     if read == 0 {
         return Err("GetProfileSize timed out".into());
@@ -580,7 +593,7 @@ fn write_profile(
 
     let mut ack = [0_u8; protocol::HID_REPORT_LENGTH];
     let read = hid_device
-        .read_timeout(&mut ack, 2_000)
+        .read_timeout(&mut ack, ACK_TIMEOUT_MS)
         .map_err(|error| error.to_string())?;
     if read == 0 {
         return Err("timed out waiting for SetBaseProfile ACK".into());
@@ -602,7 +615,7 @@ fn transact_short(device: &HidDevice, request: &[u8], command: u8) -> Result<Vec
     write_report(device, request)?;
     let mut response = [0_u8; protocol::HID_REPORT_LENGTH];
     let read = device
-        .read_timeout(&mut response, 1_000)
+        .read_timeout(&mut response, SHORT_COMMAND_TIMEOUT_MS)
         .map_err(|error| error.to_string())?;
     if read == 0 {
         return Err(format!("command 0x{command:02X} timed out"));
@@ -639,10 +652,7 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
             stabilization: signed_stabilization(settings.right_curve.stabilization),
         },
         rapid_fire: RapidFireSummary {
-            m1: settings.rapid_fire.m1,
-            m2: settings.rapid_fire.m2,
-            m3: settings.rapid_fire.m3,
-            m4: settings.rapid_fire.m4,
+            keys: settings.rapid_fire.keys.to_vec(),
         },
         rapid_fire_speed_index: settings.rapid_fire.speed_index,
         rapid_fire_timing: settings
@@ -739,18 +749,16 @@ fn parse_key_bindings(
     for (index, value) in values.into_iter().enumerate() {
         let compact = value
             .trim()
-            .replace(' ', "")
-            .replace(':', "")
-            .replace('-', "");
+            .replace([' ', ':', '-'], "");
         if compact.len() != 8 || !compact.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(format!(
                 "key binding {} must contain exactly 8 hexadecimal digits",
                 index + 1
             ));
         }
-        for byte_index in 0..4 {
+        for (byte_index, byte) in bindings[index].iter_mut().enumerate() {
             let start = byte_index * 2;
-            bindings[index][byte_index] = u8::from_str_radix(&compact[start..start + 2], 16)
+            *byte = u8::from_str_radix(&compact[start..start + 2], 16)
                 .map_err(|_| format!("invalid key binding {}", index + 1))?;
         }
     }
@@ -764,7 +772,11 @@ mod live_tests {
     #[test]
     #[ignore = "requires a connected BIGBIG WON controller"]
     fn live_macro_round_trip() {
-        let macros = read_macros().expect("D5/D9 macro read");
+        let device_path = scan_device()
+            .expect("scan controller")
+            .expect("connected controller")
+            .path;
+        let macros = read_macros(&device_path).expect("D5/D9 macro read");
         let slot0 = macros
             .slots
             .first()
@@ -772,14 +784,18 @@ mod live_tests {
             .raw_record
             .clone();
         assert!(!slot0.is_empty(), "slot 0 D9 record must be present");
-        let written = write_macro(0, slot0).expect("D8/D9 same-content round trip");
+        let written = write_macro(&device_path, 0, slot0).expect("D8/D9 same-content round trip");
         assert_eq!(written.ack_value, 0);
     }
 
     #[test]
     #[ignore = "requires a connected BIGBIG WON controller"]
     fn live_probe_one_macro_step_and_restore_empty_slot() {
-        let macros = read_macros().expect("initial D5/D9 macro read");
+        let device_path = scan_device()
+            .expect("scan controller")
+            .expect("connected controller")
+            .path;
+        let macros = read_macros(&device_path).expect("initial D5/D9 macro read");
         let (slot, original) = macros
             .slots
             .iter()
@@ -794,7 +810,8 @@ mod live_tests {
         probe.extend_from_slice(&[0x50, 0x00, 0x12, 0x34, 0x56, 0x78, 0x11, 0x22, 0x33, 0x44]);
         let expected_probe =
             protocol::normalize_macro_record(&probe).expect("normalize one-step probe record");
-        let written = write_macro(slot, probe).expect("D8 one-step write and D9 readback");
+        let written =
+            write_macro(&device_path, slot, probe).expect("D8 one-step write and D9 readback");
         println!(
             "probe slot={} ack={} raw={}",
             slot,
@@ -804,7 +821,8 @@ mod live_tests {
         assert_eq!(written.ack, "A5 05 D8 00 82");
         assert_eq!(written.slot.raw_record, expected_probe);
 
-        let restored = write_macro(slot, original.clone()).expect("D8 restore and D9 readback");
+        let restored = write_macro(&device_path, slot, original.clone())
+            .expect("D8 restore and D9 readback");
         println!(
             "restored slot={} ack={} raw={}",
             slot,
@@ -896,12 +914,25 @@ impl VibrationSettingsInput {
 }
 
 fn find_config_info(api: &HidApi) -> Option<&hidapi::DeviceInfo> {
-    api.device_list().find(|info| {
-        info.vendor_id() == protocol::VENDOR_ID
-            && info.product_id() == protocol::PRODUCT_ID
-            && info.usage_page() == protocol::CONFIG_USAGE_PAGE
-            && info.usage() == protocol::CONFIG_USAGE
-    })
+    api.device_list().find(|info| is_config_info(info))
+}
+
+fn find_config_info_at_path<'a>(
+    api: &'a HidApi,
+    expected_device_path: &str,
+) -> Result<&'a hidapi::DeviceInfo, String> {
+    api.device_list()
+        .find(|info| {
+            is_config_info(info) && info.path().to_string_lossy() == expected_device_path
+        })
+        .ok_or_else(|| "the connected controller changed; read its profile before continuing".into())
+}
+
+fn is_config_info(info: &hidapi::DeviceInfo) -> bool {
+    info.vendor_id() == protocol::VENDOR_ID
+        && info.product_id() == protocol::PRODUCT_ID
+        && info.usage_page() == protocol::CONFIG_USAGE_PAGE
+        && info.usage() == protocol::CONFIG_USAGE
 }
 
 fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {

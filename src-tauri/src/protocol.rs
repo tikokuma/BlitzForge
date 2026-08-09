@@ -14,22 +14,19 @@ pub const V37_RIGHT_DEFAULT_CURVE_OFFSET: usize = 0x03a;
 pub const V37_TURBO_KEY_MASK_OFFSET: usize = 0x140;
 pub const V37_TURBO_SPEED_INDEX_OFFSET: usize = 0x144;
 const V37_TURBO_KEY_MASK_LENGTH: usize = 4;
-pub const V37_M1_TURBO_MASK: u32 = 0x0080_0000;
-pub const V37_M2_TURBO_MASK: u32 = 0x0100_0000;
-pub const V37_M3_TURBO_MASK: u32 = 0x0200_0000;
-pub const V37_M4_TURBO_MASK: u32 = 0x0400_0000;
 pub const V37_KEYMAP_OFFSET: usize = 0x164;
 pub const V37_KEYMAP_ENTRY_COUNT: usize = 32;
 pub const V37_KEYMAP_ENTRY_LENGTH: usize = 4;
 pub const MACRO_SLOT_COUNT: usize = 4;
 pub const MACRO_HEADER_LENGTH: usize = 10;
 pub const MACRO_STEP_LENGTH: usize = 10;
-pub const MACRO_MAX_LENGTH: usize = 0x294;
+pub const MACRO_MAX_STEPS: usize = 64;
+pub const MACRO_MAX_LENGTH: usize = MACRO_HEADER_LENGTH + MACRO_STEP_LENGTH * MACRO_MAX_STEPS;
 
 const GET_BASE_PROFILE: [u8; 4] = [0xa5, 0x04, 0xd6, 0x7f];
 const GET_PROFILE_SIZE: [u8; 4] = [0xa5, 0x04, 0xd3, 0x7c];
 const GET_POLLING_RATE: [u8; 4] = [0xa5, 0x04, 0xf6, 0x9f];
-const GET_STEP_ACCURACY: [u8; 4] = [0xa5, 0x04, 0xf7, 0x0a];
+const GET_STEP_ACCURACY: [u8; 4] = [0xa5, 0x04, 0xf7, 0xa0];
 const GET_MACRO_LIST: [u8; 4] = [0xa5, 0x04, 0xd5, 0x7e];
 
 pub struct ReadFragment {
@@ -69,10 +66,7 @@ pub struct StepAccuracySettings {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RapidFireSettings {
-    pub m1: Option<bool>,
-    pub m2: Option<bool>,
-    pub m3: Option<bool>,
-    pub m4: Option<bool>,
+    pub keys: [Option<bool>; V37_KEYMAP_ENTRY_COUNT],
     pub speed_index: Option<u8>,
 }
 
@@ -295,10 +289,7 @@ pub fn rapid_fire_settings(profile: &[u8]) -> Result<RapidFireSettings, String> 
     }
     let mask = turbo_key_mask(profile)?;
     Ok(RapidFireSettings {
-        m1: Some(mask & V37_M1_TURBO_MASK != 0),
-        m2: Some(mask & V37_M2_TURBO_MASK != 0),
-        m3: Some(mask & V37_M3_TURBO_MASK != 0),
-        m4: Some(mask & V37_M4_TURBO_MASK != 0),
+        keys: std::array::from_fn(|slot| Some(mask & turbo_key_bit(slot) != 0)),
         speed_index: Some(profile[V37_TURBO_SPEED_INDEX_OFFSET]),
     })
 }
@@ -324,7 +315,7 @@ pub fn rapid_fire_timing(index: u8) -> Option<RapidFireTiming> {
     Some(RapidFireTiming {
         period_ms,
         half_period_ms: period_ms / 2,
-        hz: (1000 / u16::from(period_ms)) as u8,
+        hz: (1000 / period_ms) as u8,
     })
 }
 
@@ -353,14 +344,9 @@ pub fn set_controller_settings(
         "right",
     )?;
     write_key_bindings(profile, key_bindings)?;
-    for (enabled, mask) in [
-        (rapid_fire.m1, V37_M1_TURBO_MASK),
-        (rapid_fire.m2, V37_M2_TURBO_MASK),
-        (rapid_fire.m3, V37_M3_TURBO_MASK),
-        (rapid_fire.m4, V37_M4_TURBO_MASK),
-    ] {
+    for (slot, enabled) in rapid_fire.keys.into_iter().enumerate() {
         if let Some(enabled) = enabled {
-            set_turbo_key_bit(profile, mask, enabled);
+            set_turbo_key_bit(profile, turbo_key_bit(slot), enabled);
         }
     }
     if let Some(speed_index) = rapid_fire.speed_index {
@@ -370,6 +356,11 @@ pub fn set_controller_settings(
         profile[V37_TURBO_SPEED_INDEX_OFFSET] = speed_index;
     }
     Ok(())
+}
+
+fn turbo_key_bit(slot: usize) -> u32 {
+    // turboKey uses the same zero-based input-slot order as the v37 keymap.
+    1_u32 << slot
 }
 
 fn set_turbo_key_bit(profile: &mut [u8], bit: u32, enabled: bool) {
@@ -596,16 +587,17 @@ pub fn decode_macro_info(report: &[u8]) -> Result<Vec<u8>, String> {
         ));
     }
     if !(MACRO_HEADER_LENGTH..=MACRO_MAX_LENGTH).contains(&active_length)
-        || (active_length - MACRO_HEADER_LENGTH) % MACRO_STEP_LENGTH != 0
+        || !(active_length - MACRO_HEADER_LENGTH).is_multiple_of(MACRO_STEP_LENGTH)
     {
         return Err(format!("invalid D9 macro length 0x{active_length:04X}"));
     }
+    validate_macro_crc(payload)?;
     Ok(payload.to_vec())
 }
 
 pub fn normalize_macro_record(input: &[u8]) -> Result<Vec<u8>, String> {
     if !(MACRO_HEADER_LENGTH..=MACRO_MAX_LENGTH).contains(&input.len())
-        || (input.len() - MACRO_HEADER_LENGTH) % MACRO_STEP_LENGTH != 0
+        || !(input.len() - MACRO_HEADER_LENGTH).is_multiple_of(MACRO_STEP_LENGTH)
     {
         return Err(format!(
             "macro record must be 10 + 10*n bytes, got {}",
@@ -613,6 +605,7 @@ pub fn normalize_macro_record(input: &[u8]) -> Result<Vec<u8>, String> {
         ));
     }
     let mut record = input.to_vec();
+    validate_macro_input_masks(&record)?;
     let record_length = record.len();
     record[2..4].copy_from_slice(&(record_length as u16).to_be_bytes());
     let crc = macro_crc(&record)?;
@@ -636,6 +629,41 @@ pub fn macro_crc(record: &[u8]) -> Result<u16, String> {
         }
     }
     Ok(crc)
+}
+
+pub fn validate_macro_crc(record: &[u8]) -> Result<(), String> {
+    if record.len() < MACRO_HEADER_LENGTH {
+        return Err("macro record is too short".into());
+    }
+    let stored = u16::from_be_bytes([record[0], record[1]]);
+    let computed = macro_crc(record)?;
+    if stored != computed {
+        return Err(format!(
+            "macro CRC mismatch: stored 0x{stored:04X}, computed 0x{computed:04X}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_macro_input_masks(record: &[u8]) -> Result<(), String> {
+    for (step_index, step) in record[MACRO_HEADER_LENGTH..].chunks_exact(MACRO_STEP_LENGTH).enumerate() {
+        let input_mask = u32::from_be_bytes([step[2], step[3], step[4], step[5]]);
+        let left_direction = ((input_mask >> 24) & 0x0f) as u8;
+        let right_direction = ((input_mask >> 28) & 0x0f) as u8;
+        if !matches!(left_direction, 0 | 1 | 2 | 4 | 5 | 6 | 8 | 9 | 10) {
+            return Err(format!(
+                "macro step {} contains undefined left-stick direction code 0x{left_direction:X}",
+                step_index + 1
+            ));
+        }
+        if !matches!(right_direction, 0 | 1 | 2 | 4 | 5 | 6 | 8 | 9 | 10) {
+            return Err(format!(
+                "macro step {} contains undefined right-stick direction code 0x{right_direction:X}",
+                step_index + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn build_macro_write_reports(slot: u8, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
@@ -731,6 +759,16 @@ mod tests {
         let crc = profile_crc(&profile).unwrap();
         profile[..2].copy_from_slice(&crc.to_be_bytes());
         profile
+    }
+
+    fn rapid_keys(
+        states: &[(usize, Option<bool>)],
+    ) -> [Option<bool>; V37_KEYMAP_ENTRY_COUNT] {
+        let mut keys = [None; V37_KEYMAP_ENTRY_COUNT];
+        for &(slot, enabled) in states {
+            keys[slot] = enabled;
+        }
+        keys
     }
 
     #[test]
@@ -858,10 +896,7 @@ mod tests {
             },
             [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
             RapidFireSettings {
-                m1: None,
-                m2: Some(false),
-                m3: None,
-                m4: None,
+                keys: rapid_keys(&[(24, Some(false))]),
                 speed_index: None,
             },
         )
@@ -925,10 +960,7 @@ mod tests {
             },
             key_bindings,
             RapidFireSettings {
-                m1: None,
-                m2: Some(false),
-                m3: None,
-                m4: None,
+                keys: rapid_keys(&[(24, Some(false))]),
                 speed_index: None,
             },
         )
@@ -969,23 +1001,30 @@ mod tests {
             },
             [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
             RapidFireSettings {
-                m1: Some(true),
-                m2: Some(true),
-                m3: Some(true),
-                m4: Some(true),
+                keys: rapid_keys(&[
+                    (0, Some(true)),
+                    (23, Some(true)),
+                    (24, Some(true)),
+                    (25, Some(true)),
+                    (26, Some(true)),
+                    (31, Some(true)),
+                ]),
                 speed_index: Some(2),
             },
         )
         .unwrap();
         assert_eq!(
             &profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4],
-            &[0x87, 0xa2, 0x33, 0x44]
+            &[0x87, 0xa2, 0x33, 0x45]
         );
         assert_eq!(profile[V37_TURBO_SPEED_INDEX_OFFSET], 2);
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m1, Some(true));
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(true));
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m3, Some(true));
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m4, Some(true));
+        let keys = rapid_fire_settings(&profile).unwrap().keys;
+        assert_eq!(keys[0], Some(true));
+        assert_eq!(keys[23], Some(true));
+        assert_eq!(keys[24], Some(true));
+        assert_eq!(keys[25], Some(true));
+        assert_eq!(keys[26], Some(true));
+        assert_eq!(keys[31], Some(true));
 
         set_controller_settings(
             &mut profile,
@@ -1010,20 +1049,20 @@ mod tests {
             },
             [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
             RapidFireSettings {
-                m1: None,
-                m2: Some(false),
-                m3: None,
-                m4: None,
+                keys: rapid_keys(&[(24, Some(false))]),
                 speed_index: None,
             },
         )
         .unwrap();
         assert_eq!(
             &profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4],
-            &[0x86, 0xa2, 0x33, 0x44]
+            &[0x86, 0xa2, 0x33, 0x45]
         );
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m1, Some(true));
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(false));
+        let keys = rapid_fire_settings(&profile).unwrap().keys;
+        assert_eq!(keys[0], Some(true));
+        assert_eq!(keys[23], Some(true));
+        assert_eq!(keys[24], Some(false));
+        assert_eq!(keys[31], Some(true));
     }
 
     #[test]
@@ -1034,7 +1073,7 @@ mod tests {
 
         assert_eq!(
             turbo_key_mask(&profile).unwrap(),
-            V37_M1_TURBO_MASK | V37_M2_TURBO_MASK | V37_M3_TURBO_MASK
+            turbo_key_bit(23) | turbo_key_bit(24) | turbo_key_bit(25)
         );
         assert_eq!(
             rapid_fire_timing(0),
@@ -1075,6 +1114,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_macro_crc() {
+        let mut record = normalize_macro_record(&[0; MACRO_HEADER_LENGTH]).unwrap();
+        record[0] ^= 1;
+        assert!(validate_macro_crc(&record).is_err());
+    }
+
+    #[test]
+    fn rejects_undefined_macro_stick_direction() {
+        let mut record = vec![0; MACRO_HEADER_LENGTH + MACRO_STEP_LENGTH];
+        record[10 + 2] = 0x03;
+        let error = normalize_macro_record(&record).unwrap_err();
+        assert!(error.contains("undefined left-stick direction code"));
+    }
+
+    #[test]
+    fn enforces_the_64_step_macro_limit() {
+        assert_eq!(MACRO_MAX_LENGTH, 650);
+        assert!(normalize_macro_record(&vec![0; MACRO_MAX_LENGTH]).is_ok());
+        assert!(normalize_macro_record(&vec![0; MACRO_MAX_LENGTH + MACRO_STEP_LENGTH]).is_err());
+    }
+
+    #[test]
     fn builds_empty_macro_write_and_ack() {
         let record = [0, 0, 0, 0, 0, 0, 0x1f, 0, 0, 0];
         let reports = build_macro_write_reports(0, &record).unwrap();
@@ -1097,6 +1158,10 @@ mod tests {
         assert_eq!(
             build_set_polling_rate_report(0x63)[1..6],
             [0xa5, 0x05, 0xf6, 0x63, 0x03]
+        );
+        assert_eq!(
+            get_step_accuracy_report()[1..5],
+            [0xa5, 0x04, 0xf7, 0xa0]
         );
         assert_eq!(
             build_set_step_accuracy_report(StepAccuracySettings {

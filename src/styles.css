@@ -349,7 +349,18 @@ pre {
   text-align: left;
 }
 .keymap-mapping:hover { border-color: #397ce8; background: #273855; }
+.keymap-mapping-configured { border-color: #ff6a00; color: #ffb178; }
+.keymap-mapping-configured:hover { border-color: #ff6a00; background: #3a2a20; }
 .keymap-mapping-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.keymap-reset {
+  justify-self: start;
+  padding: 3px 7px;
+  border-color: #3a4655;
+  color: #9eabbc;
+  background: #18212c;
+  font-size: 11px;
+}
+.keymap-reset:hover { border-color: #ff6a00; color: #ffb178; background: #3a2a20; }
 .keymap-rapid {
   display: inline-flex;
   align-items: center;
