@@ -36,18 +36,16 @@
               <p class="section-kicker">PROFILE LIBRARY</p>
               <h2>共有プロファイル</h2>
               <p>公式アプリと同じ Config.db を使用します。</p>
+              <p id="active-profile-status" class="profile-current-status">現在使用中: 確認中</p>
             </div>
             <div class="button-row">
               <button id="import-profile" type="button">Shareコードから追加</button>
-              <button id="new-profile" class="accent" type="button">新規作成</button>
-              <button id="read-device-profile" class="accent" type="button" disabled>コントローラーのプロファイルを読み込む</button>
-              <button id="export-profile" type="button" disabled>Shareコードを発行</button>
-              <button id="apply-profile" class="primary" type="button" disabled>コントローラーへ適用</button>
+              <button id="new-profile" class="subtle-button" type="button">新規作成</button>
+              <button id="read-device-profile" class="subtle-button" type="button" disabled>コントローラーのプロファイルを読み込む</button>
             </div>
           </div>
           <div id="profile-library" class="profile-library"></div>
           <dl id="profile-details" class="details"></dl>
-          <p id="profile-hint" class="empty-hint">まだプロファイルを読み込んでいません。</p>
         </section>
       </div>
 
@@ -280,8 +278,7 @@
             </div>
             <div class="button-row">
               <span id="device-dirty" class="status-pill" hidden>未保存</span>
-              <button id="refresh-device-settings" type="button">再読込</button>
-              <button id="save-device-settings" class="primary" data-operation disabled>デバイス設定を保存</button>
+              <span class="status-pill">上部の「プロファイルを保存」で保存</span>
             </div>
           </div>
           <div class="device-settings-grid">

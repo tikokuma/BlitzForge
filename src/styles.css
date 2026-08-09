@@ -37,6 +37,15 @@ button.primary { border-color: #397ce8; background: #2869d3; }
 button.primary:hover { background: #3477df; }
 button.accent { border-color: #ae633c; background: #7e432b; }
 button.accent:hover { background: #955234; }
+button.subtle-button {
+  padding: 7px 10px;
+  border-color: #2c3644;
+  color: #9ba8ba;
+  background: #1a2029;
+  font-size: 12px;
+  font-weight: 600;
+}
+button.subtle-button:hover { border-color: #435167; color: #d7dee8; background: #222a34; }
 button:disabled { cursor: not-allowed; opacity: .42; }
 
 [hidden] { display: none !important; }
@@ -135,11 +144,15 @@ p { color: #8e9aaa; font-size: 13px; line-height: 1.5; }
 }
 
 .profile-card-matched { border-color: #397ce8; }
+.profile-card-active { border-color: #64d6a2; }
 .profile-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .profile-card-heading h3 { color: #e8edf5; font-size: 15px; }
+.profile-card-states { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .profile-card-details { color: #8996a7; font-size: 12px; overflow-wrap: anywhere; }
 .profile-card-actions { justify-content: flex-start; }
+.profile-current-status { margin-top: 8px; color: #9cbaf0; font-size: 12px; }
 .profile-compatible { color: #64d6a2; background: #17362c; }
+.profile-active { color: #64d6a2; background: #17362c; }
 .profile-incompatible { color: #ffb5b5; background: #3b2024; }
 
 .details {

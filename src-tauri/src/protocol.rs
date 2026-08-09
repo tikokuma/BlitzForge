@@ -273,40 +273,25 @@ pub fn stored_profile_crc(profile: &[u8]) -> Result<u16, String> {
 pub fn new_v37_profile() -> Vec<u8> {
     let mut profile = vec![0_u8; V37_PROFILE_LENGTH];
     profile[2..4].copy_from_slice(&(V37_PROFILE_LENGTH as u16).to_be_bytes());
-    write_curve(
-        &mut profile,
-        V37_LEFT_DEFAULT_CURVE_OFFSET,
-        CurveSettings {
-            center: 0,
-            point1_x: 25,
-            point1_y: 25,
-            point2_x: 75,
-            point2_y: 75,
-            edge: 0,
-            stabilization: 0,
-        },
-        "left",
-    )
-    .expect("valid default left curve");
-    write_curve(
-        &mut profile,
-        V37_RIGHT_DEFAULT_CURVE_OFFSET,
-        CurveSettings {
-            center: 0,
-            point1_x: 25,
-            point1_y: 25,
-            point2_x: 75,
-            point2_y: 75,
-            edge: 0,
-            stabilization: 0,
-        },
-        "right",
-    )
-    .expect("valid default right curve");
-    profile[V37_LEFT_VIBRATION_MIN_OFFSET] = 0;
-    profile[V37_RIGHT_VIBRATION_MIN_OFFSET] = 0;
-    profile[V37_LEFT_VIBRATION_MAX_OFFSET] = 1;
-    profile[V37_RIGHT_VIBRATION_MAX_OFFSET] = 1;
+
+    // These are the bytes used by the official app's v37 "default" profile.
+    // The six curve blocks are kept even though Lite currently exposes only
+    // the first left/right pair; the official profile contains all six.
+    profile[4..9].copy_from_slice(&[0, 5, 5, 5, 5]);
+    const DEFAULT_CURVE: [u8; 0x0b] = [
+        0x01, 0x20, 0x0c, 0x00, 0x1e, 0x1e, 0x46, 0x46, 0x61, 0x64, 0x00,
+    ];
+    for offset in [0x0e, 0x3a, 0x66, 0x92, 0xbe, 0xea] {
+        profile[offset..offset + DEFAULT_CURVE.len()].copy_from_slice(&DEFAULT_CURVE);
+    }
+    profile[0x11d..0x11f].copy_from_slice(&[0x20, 0x20]);
+    for offset in [0x123, 0x12b, 0x133] {
+        profile[offset..offset + 4].copy_from_slice(&[0x0a, 0x3c, 0x3c, 0x2a]);
+    }
+    profile[0x144] = 0x02;
+    profile[0x14c..0x150].fill(0xff);
+    profile[0x150] = 0x33;
+
     let crc = profile_crc(&profile).expect("default profile crc");
     profile[..2].copy_from_slice(&crc.to_be_bytes());
     profile
@@ -916,11 +901,33 @@ mod tests {
     }
 
     #[test]
-    fn creates_a_valid_v37_profile_without_hardware() {
+    fn creates_the_official_v37_default_profile_without_hardware() {
         let profile = new_v37_profile();
         assert_eq!(normalize_v37_profile(&profile).unwrap(), profile);
-        assert_eq!(controller_settings(&profile).unwrap().left_curve.edge, 0);
-        assert_eq!(vibration_settings(&profile).unwrap().left.max, 1);
+        assert_eq!(stored_profile_crc(&profile), Ok(0x4725));
+        assert_eq!(&profile[4..9], &[0, 5, 5, 5, 5]);
+        for offset in [0x0e, 0x3a, 0x66, 0x92, 0xbe, 0xea] {
+            assert_eq!(
+                &profile[offset..offset + 0x0b],
+                &[
+                    0x01, 0x20, 0x0c, 0x00, 0x1e, 0x1e, 0x46, 0x46, 0x61, 0x64, 0x00
+                ]
+            );
+        }
+        assert_eq!(&profile[0x11d..0x11f], &[0x20, 0x20]);
+        for offset in [0x123, 0x12b, 0x133] {
+            assert_eq!(&profile[offset..offset + 4], &[0x0a, 0x3c, 0x3c, 0x2a]);
+        }
+        assert_eq!(profile[0x144], 2);
+        assert_eq!(&profile[0x14c..0x151], &[0xff, 0xff, 0xff, 0xff, 0x33]);
+
+        let settings = controller_settings(&profile).unwrap();
+        assert_eq!(settings.left_curve.center, 12);
+        assert_eq!(settings.left_curve.point1_x, 30);
+        assert_eq!(settings.left_curve.point2_x, 70);
+        assert_eq!(settings.left_curve.edge, 3);
+        assert_eq!(settings.rapid_fire.speed_index, Some(2));
+        assert_eq!(vibration_settings(&profile).unwrap().left.max, 255);
     }
 
     fn rapid_keys(states: &[(usize, Option<bool>)]) -> [Option<bool>; V37_KEYMAP_ENTRY_COUNT] {
