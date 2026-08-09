@@ -4,9 +4,9 @@ mod protocol;
 use std::sync::Mutex;
 
 use device::{
-    ControllerSettingsInput, ControllerSettingsWriteResult, DeviceSettingsInput,
-    DeviceSettingsSummary, DeviceSettingsWriteResult, DeviceSummary, ProfileSummary,
-    VibrationSettingsInput, VibrationWriteResult,
+    AuxiliarySummary, AuxiliaryWriteResult, ControllerSettingsInput, ControllerSettingsWriteResult,
+    DeviceSettingsInput, DeviceSettingsSummary, DeviceSettingsWriteResult, DeviceSummary,
+    MacroSummary, MacroWriteResult, ProfileSummary, VibrationSettingsInput, VibrationWriteResult,
 };
 
 #[derive(Clone)]
@@ -171,6 +171,34 @@ async fn set_device_settings(
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn read_macros() -> Result<MacroSummary, String> {
+    tauri::async_runtime::spawn_blocking(device::read_macros)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn write_macro(slot: u8, raw_record: Vec<u8>) -> Result<MacroWriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || device::write_macro(slot, raw_record))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn read_auxiliary() -> Result<AuxiliarySummary, String> {
+    tauri::async_runtime::spawn_blocking(device::read_auxiliary)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn write_auxiliary(kind: String, values: Vec<u8>) -> Result<AuxiliaryWriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || device::write_auxiliary(kind, values))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -183,7 +211,11 @@ pub fn run() {
             set_vibration,
             set_controller_settings,
             read_device_settings,
-            set_device_settings
+            set_device_settings,
+            read_macros,
+            write_macro,
+            read_auxiliary,
+            write_auxiliary
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -22,6 +22,8 @@ type RapidFireSettings = {
   m2: boolean | null;
   m3: boolean | null;
   m4: boolean | null;
+  speedIndex: number | null;
+  timing?: { periodMs: number; halfPeriodMs: number; hz: number } | null;
 };
 
 type ControllerSettings = {
@@ -29,6 +31,8 @@ type ControllerSettings = {
   leftStick: CurveSettings;
   rightStick: CurveSettings;
   rapidFire: RapidFireSettings;
+  rapidFireSpeedIndex: number | null;
+  rapidFireTiming: { periodMs: number; halfPeriodMs: number; hz: number } | null;
   keyBindings: string[];
 };
 
@@ -60,8 +64,61 @@ type ControllerSettingsInput = {
   rectangleAlgorithm: boolean;
   leftStick: CurveSettings;
   rightStick: CurveSettings;
-  rapidFire: { m2: boolean | null };
+  rapidFire: {
+    m1: boolean | null;
+    m2: boolean | null;
+    m3: boolean | null;
+    m4: boolean | null;
+    speedIndex: number | null;
+  };
   keyBindings: string[];
+};
+
+type MacroSlotSummary = {
+  slot: number;
+  crc: string;
+  activeLength: number;
+  stepCount: number;
+  setting: number;
+  mKey: number;
+  runKey: number;
+  flags: number;
+  repeat: number;
+  rawRecord: number[];
+  error: string | null;
+};
+
+type MacroSummary = {
+  device: DeviceSummary;
+  listResponse: string;
+  slots: MacroSlotSummary[];
+};
+
+type MacroWriteResult = {
+  device: DeviceSummary;
+  slot: MacroSlotSummary;
+  ack: string;
+  ackValue: number;
+};
+
+type AuxiliaryProbe = {
+  name: string;
+  command: string;
+  response: string | null;
+  error: string | null;
+};
+
+type AuxiliarySummary = {
+  device: DeviceSummary;
+  uuid: string | null;
+  zkm: number | null;
+  probes: AuxiliaryProbe[];
+};
+
+type AuxiliaryWriteResult = {
+  device: DeviceSummary;
+  request: string;
+  response: string | null;
 };
 
 type StepAccuracySettings = {
@@ -129,6 +186,13 @@ const curveRangeIds = [
   "curve-edge",
 ] as const;
 
+const KEYMAP_TARGET_LABELS = [
+  "A", "B", "C", "X", "Y", "Z", "L1", "R1",
+  "L2", "R2", "SELECT / View", "START / Menu", "HOME", "L3", "R3", "CAPTURE / Share",
+  "Up", "Down", "Left", "Right", "Back", "Mode", "Menu", "M1",
+  "M2", "M3", "M4", "M5", "M6", "M7", "M8", "POWER",
+] as const;
+
 const KEYMAP_SLOT_LABELS = [
   "A",
   "B",
@@ -167,7 +231,7 @@ const KEYMAP_SLOT_LABELS = [
 type KeymapChoice =
   | { kind: "identity"; label: string }
   | { kind: "controller"; slot: number; label: string }
-  | { kind: "keyboard"; usage: number; label: string }
+  | { kind: "keyboard"; modifier: number; usage: number; secondUsage: number; label: string }
   | { kind: "none"; label: "Null" };
 
 const KEYMAP_VISIBLE_SOURCES = [
@@ -195,27 +259,7 @@ const KEYMAP_VISIBLE_SOURCES = [
 ] as const;
 
 const KEYMAP_CONTROLLER_CHOICES: readonly KeymapChoice[] = [
-  { kind: "controller", slot: 0, label: "A" },
-  { kind: "controller", slot: 1, label: "B" },
-  { kind: "controller", slot: 3, label: "X" },
-  { kind: "controller", slot: 4, label: "Y" },
-  { kind: "controller", slot: 16, label: "Up" },
-  { kind: "controller", slot: 17, label: "Down" },
-  { kind: "controller", slot: 18, label: "Left" },
-  { kind: "controller", slot: 19, label: "Right" },
-  { kind: "controller", slot: 8, label: "LT" },
-  { kind: "controller", slot: 6, label: "LB" },
-  { kind: "controller", slot: 9, label: "RT" },
-  { kind: "controller", slot: 7, label: "RB" },
-  { kind: "controller", slot: 13, label: "L3" },
-  { kind: "controller", slot: 14, label: "R3" },
-  { kind: "controller", slot: 10, label: "View" },
-  { kind: "controller", slot: 11, label: "Menu" },
-  { kind: "controller", slot: 23, label: "M1" },
-  { kind: "controller", slot: 24, label: "M2" },
-  { kind: "controller", slot: 25, label: "M3" },
-  { kind: "controller", slot: 26, label: "M4" },
-  { kind: "controller", slot: 15, label: "Share" },
+  ...KEYMAP_TARGET_LABELS.map((label, slot) => ({ kind: "controller" as const, slot, label })),
   { kind: "none", label: "Null" },
 ];
 
@@ -229,6 +273,16 @@ const KEYBOARD_KEYS = [
   ["Up", 0x52], ["Down", 0x51], ["Print Screen", 0x46], ["L Ctrl", 0xe0], ["L Shift", 0xe1], ["L Alt", 0xe2], ["L Win", 0xe3], ["R Ctrl", 0xe4], ["R Shift", 0xe5], ["R Alt", 0xe6], ["R Win", 0xe7],
   ["Insert", 0x49], ["Delete", 0x4c], ["Home", 0x4a], ["End", 0x4d], ["Page Up", 0x4b], ["Page Down", 0x4e], ["-", 0x2d], ["+", 0x2e], ["Backspace", 0x2a], ["[", 0x2f], ["]", 0x30],
   ["\\", 0x31], [";", 0x33], ["'", 0x34], [",", 0x36], [".", 0x37], ["/", 0x38],
+] as const;
+
+const KEYBOARD_MODIFIERS = [
+  ["None", 0x00],
+  ["L Ctrl", 0x01],
+  ["L Shift", 0x02],
+  ["L Alt", 0x04],
+  ["R Ctrl", 0x10],
+  ["R Shift", 0x20],
+  ["R Alt", 0x40],
 ] as const;
 
 const KEYMAP_DEFAULT_ENTRY = "00000000";
@@ -251,6 +305,26 @@ const STEP_ACCURACY_OPTIONS = [
   { value: "256", label: "256" },
 ] as const;
 
+const MACRO_INPUT_OPTIONS = [
+  ["左スティック ↑", 0x01000000], ["左スティック ↗", 0x09000000], ["左スティック →", 0x08000000], ["左スティック ↘", 0x0a000000],
+  ["左スティック ↓", 0x02000000], ["左スティック ↙", 0x06000000], ["左スティック ←", 0x04000000], ["左スティック ↖", 0x05000000],
+  ["右スティック ↑", 0x10000000], ["右スティック ↗", 0x90000000], ["右スティック →", 0x80000000], ["右スティック ↘", 0xa0000000],
+  ["右スティック ↓", 0x20000000], ["右スティック ↙", 0x60000000], ["右スティック ←", 0x40000000], ["右スティック ↖", 0x50000000],
+  ["START", 0x00000800], ["SELECT", 0x00000400], ["予約1", 0x00040000], ["▲", 0x00010000],
+  ["▼", 0x00020000], ["予約2", 0x00080000], ["特殊", 0x00000001], ["A", 0x00000002],
+  ["B", 0x00000008], ["X", 0x00000010], ["Y", 0x00000040], ["LB", 0x00000100],
+  ["LT", 0x00000080], ["RB", 0x00000200], ["RT", 0x00002000], ["L3 / R3", 0x00004000],
+] as const;
+
+const MACRO_KNOWN_MASK = MACRO_INPUT_OPTIONS.reduce((value, [, mask]) => (value | mask) >>> 0, 0);
+
+type MacroStep = {
+  durationMs: number;
+  marker: boolean;
+  inputMask: number;
+  analog: [number, number, number, number];
+};
+
 const byId = <T extends Element = HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
   if (!element) {
@@ -272,10 +346,12 @@ let curveDrafts: Record<Stick, CurveSettings> = {
   leftStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
   rightStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
 };
-let rapidFireDraft: RapidFireSettings = { m1: null, m2: null, m3: null, m4: null };
+let rapidFireDraft: RapidFireSettings = { m1: null, m2: null, m3: null, m4: null, speedIndex: null };
 let keymapDraft: string[] = Array.from({ length: 32 }, () => KEYMAP_DEFAULT_ENTRY);
 let activeKeymapSlot: number | null = null;
 let pendingKeymapChoice: KeymapChoice | null = null;
+let macroSummary: MacroSummary | null = null;
+let macroDraftRecord: number[] | null = null;
 let deviceSettingsDraft: DeviceSettings = {
   pollingRate: 0,
   stepAccuracy: { mode: 0, value: 0, extension: 0 },
@@ -298,51 +374,64 @@ function setBusy(value: boolean, message?: string) {
 }
 
 function syncActions() {
-  byId<HTMLButtonElement>("scan").disabled = busy;
-  byId<HTMLButtonElement>("read").disabled = busy || !deviceConnected;
   byId<HTMLButtonElement>("open-settings").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("import-profile").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("export-profile").disabled = busy || !currentProfile;
+  byId<HTMLButtonElement>("apply-profile").disabled = busy || !currentProfile || settingsDirty || vibrationDirty;
   byId<HTMLButtonElement>("save-settings").disabled = busy || !currentProfile || !settingsDirty;
   byId<HTMLButtonElement>("save-vibration").disabled = busy || !currentProfile || !vibrationDirty;
   byId<HTMLButtonElement>("refresh-device-settings").disabled = busy || !currentProfile;
   byId<HTMLButtonElement>("save-device-settings").disabled = busy || !currentProfile || !deviceSettingsDirty;
-  byId<HTMLButtonElement>("import-profile").disabled = busy || !deviceConnected || settingsDirty || vibrationDirty;
-  byId<HTMLButtonElement>("export-profile").disabled = busy || !currentProfile || settingsDirty || vibrationDirty;
-  byId<HTMLButtonElement>("apply-profile").disabled = busy || !currentProfile || settingsDirty || vibrationDirty;
+  byId<HTMLButtonElement>("refresh-macros").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("add-macro-step").disabled = busy || !macroDraftRecord || (macroDraftRecord.length - 10) / 10 >= 64;
+  byId<HTMLButtonElement>("write-macro").disabled = busy || !deviceConnected || !macroDraftRecord;
+  byId<HTMLButtonElement>("apply-macro-header").disabled = busy || !macroDraftRecord;
+  byId<HTMLButtonElement>("refresh-auxiliary").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("write-logo-led").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("write-led-brightness").disabled = busy || !deviceConnected;
+  byId<HTMLButtonElement>("write-lighting-mode").disabled = busy || !deviceConnected;
 }
 
-function showDetails(target: HTMLElement, rows: Array<[string, string]>) {
-  target.replaceChildren(
-    ...rows.flatMap(([label, value]) => {
-      const term = document.createElement("dt");
-      const detail = document.createElement("dd");
-      term.textContent = label;
-      detail.textContent = value;
-      return [term, detail];
-    }),
-  );
+function renderDetails(id: string, rows: Array<[string, string]>) {
+  const details = byId(id);
+  details.replaceChildren();
+  for (const [label, value] of rows) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = value;
+    details.append(term, description);
+  }
+}
+
+function renderDevice(device: DeviceSummary | null) {
+  const name = byId("device-name");
+  if (!device) {
+    name.textContent = "接続を確認しています";
+    renderDetails("device-details", []);
+    return;
+  }
+  name.textContent = device.product;
+  renderDetails("device-details", [
+    ["Device", device.vendorProduct],
+    ["Usage", device.usage],
+    ["Path", device.path],
+  ]);
 }
 
 function setConnection(device: DeviceSummary | null) {
   const connection = byId("connection");
-  const deviceName = byId("device-name");
   deviceConnected = device !== null;
+  renderDevice(device);
 
   if (!device) {
     connection.textContent = "未接続";
     connection.className = "badge offline";
-    deviceName.textContent = "BIGBIG WON設定インターフェースが見つかりません";
-    byId("device-details").replaceChildren();
     return;
   }
 
   connection.textContent = "接続済み";
   connection.className = "badge online";
-  deviceName.textContent = device.product;
-  showDetails(byId("device-details"), [
-    ["Device", device.vendorProduct],
-    ["Usage", device.usage],
-    ["Path", device.path],
-  ]);
 }
 
 function clearProfile() {
@@ -351,11 +440,11 @@ function clearProfile() {
   vibrationDirty = false;
   deviceSettingsDirty = false;
   currentDeviceSettings = null;
-  byId("profile-details").replaceChildren();
-  byId<HTMLPreElement>("profile-head").hidden = true;
-  byId("profile-hint").textContent = deviceConnected
-    ? "接続済みです。読み取ると設定画面を開けます。"
-    : "まだプロファイルを読み込んでいません。";
+  byId("settings-profile-status").textContent = "";
+  renderDetails("profile-details", []);
+  byId("profile-head").textContent = "";
+  byId("profile-head").hidden = true;
+  byId("profile-hint").textContent = "まだプロファイルを読み込んでいません。";
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
   byId("device-dirty").hidden = true;
@@ -364,20 +453,26 @@ function clearProfile() {
 
 function renderProfile(profile: ProfileSummary) {
   const crcState = profile.storedCrc === profile.computedCrc ? "一致" : "不一致";
-  showDetails(byId("profile-details"), [
+  byId("settings-profile-status").textContent = `v${profile.protocolVersion} / ${profile.length} bytes / CRC ${profile.storedCrc} (${crcState})`;
+  const rapid = profile.settings.rapidFire;
+  const rapidState = [rapid.m1, rapid.m2, rapid.m3, rapid.m4]
+    .map((value, index) => `M${index + 1}: ${value === null ? "不明" : value ? "ON" : "OFF"}`)
+    .join(" / ");
+  const timing = rapid.timing
+    ? `${rapid.timing.hz} Hz / ${rapid.timing.periodMs} ms`
+    : rapid.speedIndex === null ? "不明" : `index ${rapid.speedIndex}`;
+  renderDetails("profile-details", [
     ["プロトコル", `v${profile.protocolVersion}`],
     ["サイズ", `${profile.length} bytes`],
     ["CRC", `${profile.storedCrc} / ${profile.computedCrc} (${crcState})`],
     ["振動", `左 ${profile.vibration.left.min}–${profile.vibration.left.max} / 右 ${profile.vibration.right.min}–${profile.vibration.right.max}`],
     ["矩形アルゴリズム", profile.settings.rectangleAlgorithm ? "有効" : "無効"],
-    ["連射", profile.settings.rapidFire.m2 === null
-      ? "M2: 不明"
-      : `M2: ${profile.settings.rapidFire.m2 ? "有効" : "無効"}`],
+    ["連射", `${rapidState} / speed ${timing}`],
   ]);
-  const head = byId<HTMLPreElement>("profile-head");
+  const head = byId("profile-head");
   head.textContent = profile.head;
-  head.hidden = false;
-  byId("profile-hint").hidden = true;
+  head.hidden = profile.head.length === 0;
+  byId("profile-hint").textContent = "読み込み済みです。設定を開いて編集できます。";
 }
 
 function setRangeControl(id: string, value: number) {
@@ -466,7 +561,6 @@ function readVibrationSettings(): VibrationSettings {
 function updateVibrationEditorState() {
   const mode = byId<HTMLSelectElement>("vibration-mode").value as VibrationMode;
   const custom = mode === "custom";
-  byId("vibration-mode-raw").textContent = byId<HTMLSelectElement>("vibration-mode").selectedOptions[0]?.textContent ?? mode;
   for (const id of [
     "vibration-left-min",
     "vibration-left-max",
@@ -526,7 +620,7 @@ function formatHexByte(value: number): string {
 
 function keymapTargetLabel(value: number): string {
   if (value === 0xff) return "未設定";
-  return value < KEYMAP_SLOT_LABELS.length ? KEYMAP_SLOT_LABELS[value] : "予約/未割当";
+  return value < KEYMAP_TARGET_LABELS.length ? KEYMAP_TARGET_LABELS[value] : "unknown target";
 }
 
 function normalizeKeymapEntry(raw: string): string {
@@ -548,6 +642,12 @@ function describeKeymapEntry(raw: string): string {
     return "byte0～3: 8桁の16進数を入力";
   }
   const bytes = raw.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
+  if (bytes[0] === KEYMAP_KEYBOARD_TYPE) {
+    const modifier = KEYBOARD_MODIFIERS.find(([, value]) => value === bytes[1]);
+    const first = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[2]);
+    const second = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[3]);
+    return `keyboard / modifier ${formatHexByte(bytes[1])} ${modifier?.[0] ?? "unknown"} / usage0 ${formatHexByte(bytes[2])} ${first?.[0] ?? "unknown"} / usage1 ${formatHexByte(bytes[3])} ${second?.[0] ?? "none"}`;
+  }
   const targets = bytes.slice(1).map((value, index) =>
     `byte${index + 1}: ${keymapTargetLabel(value)} (${formatHexByte(value)})`,
   );
@@ -562,15 +662,25 @@ function keymapChoiceForEntry(raw: string, sourceSlot: number): KeymapChoice | n
   }
   if (bytes[0] === KEYMAP_CONTROLLER_TYPE) {
     if (bytes[1] === KEYMAP_NO_TARGET) return { kind: "none", label: "Null" };
-    const label = KEYMAP_SLOT_LABELS[bytes[1]];
-    return label && !label.startsWith("動的") && !label.startsWith("予約")
-      ? { kind: "controller", slot: bytes[1], label }
-      : null;
+    const label = KEYMAP_TARGET_LABELS[bytes[1]];
+    return label ? { kind: "controller", slot: bytes[1], label } : null;
   }
   if (bytes[0] === KEYMAP_KEYBOARD_TYPE) {
-    const keyboard = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[2])
-      ?? KEYBOARD_KEYS.find(([, usage]) => usage === bytes[1]);
-    return keyboard ? { kind: "keyboard", usage: keyboard[1], label: keyboard[0] } : null;
+    const modifier = KEYBOARD_MODIFIERS.find(([, value]) => value === bytes[1]);
+    const keyboard = KEYBOARD_KEYS.find(([, usage]) => usage === bytes[2]);
+    const secondKeyboard = bytes[3] === 0
+      ? null
+      : KEYBOARD_KEYS.find(([, usage]) => usage === bytes[3]);
+    if (!modifier || (!keyboard && !secondKeyboard)) return null;
+    const keys = [keyboard?.[0], secondKeyboard?.[0]].filter(Boolean).join(" + ");
+    const label = modifier[1] === 0 ? keys : `${modifier[0]} + ${keys}`;
+    return {
+      kind: "keyboard",
+      modifier: modifier[1],
+      usage: keyboard?.[1] ?? 0,
+      secondUsage: secondKeyboard?.[1] ?? 0,
+      label,
+    };
   }
   return null;
 }
@@ -594,10 +704,20 @@ function rapidFireForSlot(slot: number): boolean | null {
   return null;
 }
 
-function toggleM2RapidFire() {
-  if (rapidFireDraft.m2 === null) return;
-  rapidFireDraft.m2 = !rapidFireDraft.m2;
+function rapidFireKeyForSlot(slot: number): "m1" | "m2" | "m3" | "m4" | null {
+  if (slot === 23) return "m1";
+  if (slot === 24) return "m2";
+  if (slot === 25) return "m3";
+  if (slot === 26) return "m4";
+  return null;
+}
+
+function toggleRapidFire(slot: number) {
+  const key = rapidFireKeyForSlot(slot);
+  if (!key || rapidFireDraft[key] === null) return;
+  rapidFireDraft[key] = !rapidFireDraft[key];
   renderKeymapRows();
+  renderRapidFireControls(rapidFireDraft);
   markSettingsDirty();
 }
 
@@ -609,7 +729,7 @@ function encodeKeymapChoice(choice: KeymapChoice): string {
   if (choice.kind === "controller") {
     return formatKeymapBytes([KEYMAP_CONTROLLER_TYPE, choice.slot, KEYMAP_NO_TARGET, KEYMAP_NO_TARGET]);
   }
-  return formatKeymapBytes([KEYMAP_KEYBOARD_TYPE, 0x00, choice.usage, 0x00]);
+  return formatKeymapBytes([KEYMAP_KEYBOARD_TYPE, choice.modifier, choice.usage, choice.secondUsage]);
 }
 
 function keymapChoiceKey(choice: KeymapChoice | null): string {
@@ -654,13 +774,14 @@ function renderKeymapRows() {
       mappingCell.append(mappingHint);
 
       const rapidState = rapidFireForSlot(slot);
-      const rapid = document.createElement(slot === 24 ? "button" : "span");
-      rapid.className = slot === 24 ? "keymap-rapid keymap-rapid-toggle" : "keymap-rapid";
+      const rapidKey = rapidFireKeyForSlot(slot);
+      const rapid = document.createElement(rapidKey ? "button" : "span");
+      rapid.className = rapidKey ? "keymap-rapid keymap-rapid-toggle" : "keymap-rapid";
       if (rapid instanceof HTMLButtonElement) {
         rapid.type = "button";
         rapid.disabled = rapidState === null;
         rapid.setAttribute("aria-pressed", String(rapidState === true));
-        rapid.addEventListener("click", toggleM2RapidFire);
+        rapid.addEventListener("click", () => toggleRapidFire(slot));
         rapid.title = rapidState === null ? "M2連射の保存値を判定できません" : "M2連射を切り替えます";
       } else {
         rapid.title = rapidState === null ? "この連射フラグは未解析です" : "読み取り専用の連射状態";
@@ -733,6 +854,516 @@ function readKeymap(): string[] {
   return keymapDraft.map((entry) => entry.trim().toUpperCase());
 }
 
+function renderRapidFireControls(settings: RapidFireSettings) {
+  for (const [key, id] of [
+    ["m1", "rapid-m1"],
+    ["m2", "rapid-m2"],
+    ["m3", "rapid-m3"],
+    ["m4", "rapid-m4"],
+  ] as const) {
+    const input = byId<HTMLInputElement>(id);
+    const value = settings[key];
+    input.checked = value === true;
+    input.disabled = value === null;
+  }
+  const speed = byId<HTMLSelectElement>("rapid-speed");
+  speed.querySelector("option[data-generated]")?.remove();
+  if (settings.speedIndex !== null && settings.speedIndex !== undefined
+    && ![0, 1, 2].includes(settings.speedIndex)) {
+    const option = document.createElement("option");
+    option.dataset.generated = "true";
+    option.value = String(settings.speedIndex);
+    option.textContent = `unknown index ${settings.speedIndex} (preserved)`;
+    speed.append(option);
+  }
+  speed.value = settings.speedIndex === null || settings.speedIndex === undefined
+    ? "unknown"
+    : String(settings.speedIndex);
+  const timing = settings.speedIndex === null || settings.speedIndex === undefined
+    ? "unknown"
+    : settings.timing
+      ? `${settings.timing.hz} Hz / ${settings.timing.periodMs} ms period / ${settings.timing.halfPeriodMs} ms half-period`
+      : `speed index ${settings.speedIndex} (timing not mapped)`;
+  byId("rapid-timing").textContent = timing;
+}
+
+function formatBytes(bytes: number[]): string {
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+}
+
+function parseMacroRecord(raw: string): number[] {
+  const compact = raw.replace(/[^0-9a-f]/gi, "");
+  if (compact.length === 0 || compact.length % 2 !== 0) {
+    throw new Error("macro record must contain an even number of hexadecimal digits");
+  }
+  const bytes = compact.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
+  if (bytes.length < 10 || (bytes.length - 10) % 10 !== 0 || bytes.length > 0x294) {
+    throw new Error("macro record must be 10-byte header plus 10-byte steps (maximum 0x294 bytes)");
+  }
+  return bytes;
+}
+
+function signedMacroByte(value: number): number {
+  return value > 0x7f ? value - 0x100 : value;
+}
+
+function unsignedMacroByte(value: number): number {
+  return Math.max(-0x80, Math.min(0x7f, Math.round(value))) & 0xff;
+}
+
+function readMacroStep(record: number[], index: number): MacroStep {
+  const offset = 10 + index * 10;
+  const bytes = record.slice(offset, offset + 10);
+  const units = ((bytes[0] >> 4) | (bytes[1] << 4)) & 0xfff;
+  return {
+    durationMs: units * 8,
+    marker: (bytes[0] & 1) !== 0,
+    inputMask: (((bytes[2] << 24) | (bytes[3] << 16) | (bytes[4] << 8) | bytes[5]) >>> 0),
+    analog: [signedMacroByte(bytes[6]), signedMacroByte(bytes[7]), signedMacroByte(bytes[8]), signedMacroByte(bytes[9])],
+  };
+}
+
+function updateMacroStep(record: number[], index: number, changes: Partial<MacroStep>) {
+  const offset = 10 + index * 10;
+  const previous = readMacroStep(record, index);
+  const next = { ...previous, ...changes };
+  const step = record.slice(offset, offset + 10);
+  const units = Math.max(0, Math.min(0xfff, Math.round(next.durationMs / 8)));
+  step[0] = (step[0] & 0x0e) | ((units & 0x0f) << 4) | (next.marker ? 1 : 0);
+  step[1] = (units >> 4) & 0xff;
+  const mask = next.inputMask >>> 0;
+  step[2] = (mask >>> 24) & 0xff;
+  step[3] = (mask >>> 16) & 0xff;
+  step[4] = (mask >>> 8) & 0xff;
+  step[5] = mask & 0xff;
+  next.analog.forEach((value, analogIndex) => {
+    step[6 + analogIndex] = unsignedMacroByte(value);
+  });
+  record.splice(offset, 10, ...step);
+}
+
+function parseMacroMask(value: string): number {
+  const compact = value.trim().replace(/^0x/i, "").replace(/[\s_]/g, "");
+  if (compact.length === 0) return 0;
+  if (!/^[0-9a-f]{1,8}$/i.test(compact)) {
+    throw new Error("その他マスクは0x00000000〜0xFFFFFFFFで入力してください");
+  }
+  return Number.parseInt(compact, 16) >>> 0;
+}
+
+function macroInputLabels(mask: number): string[] {
+  return MACRO_INPUT_OPTIONS
+    .filter(([, optionMask]) => ((((mask >>> 0) & optionMask) >>> 0) === optionMask))
+    .map(([label]) => label);
+}
+
+function macroRunKeyLabel(value: number): string {
+  return value >= 0x17 && value <= 0x1a ? `M${value - 0x16}` : "未設定";
+}
+
+function macroStepCount(record: number[]): number {
+  return Math.max(0, (record.length - 10) / 10);
+}
+
+function setMacroSelectValue(id: string, value: number) {
+  const select = byId<HTMLSelectElement>(id);
+  select.querySelector("option[data-generated]")?.remove();
+  const textValue = String(value);
+  if (!Array.from(select.options).some((option) => option.value === textValue)) {
+    const option = document.createElement("option");
+    option.dataset.generated = "true";
+    option.value = textValue;
+    option.textContent = `未解析 (0x${value.toString(16).padStart(2, "0").toUpperCase()})`;
+    select.append(option);
+  }
+  select.value = textValue;
+}
+
+function renderMacroHeader(record: number[]) {
+  if (record.length < 10) return;
+  byId<HTMLInputElement>("macro-setting").value = String(record[4]);
+  byId<HTMLInputElement>("macro-m-key").value = String(record[5]);
+  byId<HTMLInputElement>("macro-run-key").value = String(record[6]);
+  byId<HTMLInputElement>("macro-flags").value = String(record[7]);
+  byId<HTMLInputElement>("macro-repeat").value = String((record[8] << 8) | record[9]);
+  setMacroSelectValue("macro-m-key-select", record[5]);
+  setMacroSelectValue("macro-run-key-select", record[6]);
+  byId<HTMLInputElement>("macro-run-after-release").checked = (record[7] & 1) !== 0;
+  byId<HTMLInputElement>("macro-loop").checked = (record[7] & 2) !== 0;
+}
+
+function macroNumber(id: string, maximum: number): number {
+  const value = Number(byId<HTMLInputElement>(id).value);
+  if (!Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new Error(`${id} must be an integer between 0 and ${maximum}`);
+  }
+  return value;
+}
+
+function syncFriendlyMacroHeader(record: number[]) {
+  const mKey = Number(byId<HTMLSelectElement>("macro-m-key-select").value);
+  const runKey = Number(byId<HTMLSelectElement>("macro-run-key-select").value);
+  if (!Number.isInteger(mKey) || !Number.isInteger(runKey)) {
+    throw new Error("マクロの呼び出しキーを選択してください");
+  }
+  const repeat = macroNumber("macro-repeat", 0xffff);
+  const flags = (byId<HTMLInputElement>("macro-run-after-release").checked ? 1 : 0)
+    | (byId<HTMLInputElement>("macro-loop").checked ? 2 : 0);
+  record[5] = mKey;
+  record[6] = runKey;
+  record[7] = flags;
+  record[8] = repeat >> 8;
+  record[9] = repeat & 0xff;
+  byId<HTMLInputElement>("macro-m-key").value = String(mKey);
+  byId<HTMLInputElement>("macro-run-key").value = String(runKey);
+  byId<HTMLInputElement>("macro-flags").value = String(flags);
+}
+
+function syncMacroRawFromDraft() {
+  if (!macroDraftRecord) return;
+  byId<HTMLTextAreaElement>("macro-raw").value = formatBytes(macroDraftRecord);
+}
+
+function applyMacroHeader() {
+  try {
+    const record = parseMacroRecord(byId<HTMLTextAreaElement>("macro-raw").value);
+    record[4] = macroNumber("macro-setting", 0xff);
+    record[5] = macroNumber("macro-m-key", 0xff);
+    record[6] = macroNumber("macro-run-key", 0xff);
+    record[7] = macroNumber("macro-flags", 0xff);
+    const repeat = macroNumber("macro-repeat", 0xffff);
+    record[8] = repeat >> 8;
+    record[9] = repeat & 0xff;
+    macroDraftRecord = record;
+    renderMacroHeader(record);
+    renderMacroSteps(record);
+    syncMacroRawFromDraft();
+    byId("macro-slot-details").textContent = "ヘッダーを編集中です。保存時に長さとCRCを再計算します。";
+    syncActions();
+  } catch (error) {
+    byId("macro-output").textContent = errorMessage(error);
+    setMessage(errorMessage(error));
+  }
+}
+
+function macroSlotDescription(slot: MacroSlotSummary): string {
+  const state = slot.error ? "読み取り失敗" : slot.stepCount === 0 ? "空" : `${slot.stepCount}ステップ`;
+  return `スロット ${slot.slot + 1} · ${state} · 呼び出し ${macroRunKeyLabel(slot.runKey)}`;
+}
+
+function commitMacroStep(index: number, changes: Partial<MacroStep>) {
+  if (!macroDraftRecord) return;
+  updateMacroStep(macroDraftRecord, index, changes);
+  syncMacroRawFromDraft();
+  renderMacroSteps(macroDraftRecord);
+  syncActions();
+}
+
+function renderMacroSteps(record: number[] | null) {
+  const container = byId("macro-step-list");
+  container.replaceChildren();
+  if (!record || record.length < 10) {
+    const empty = document.createElement("p");
+    empty.className = "empty-hint";
+    empty.textContent = "先に実機からマクロを読み込んでください。";
+    container.append(empty);
+    return;
+  }
+  const count = macroStepCount(record);
+  if (count === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-hint";
+    empty.textContent = "この枠は空です。「ステップを追加」から作成できます。";
+    container.append(empty);
+    return;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const step = readMacroStep(record, index);
+    const card = document.createElement("article");
+    card.className = "macro-step-card";
+
+    const heading = document.createElement("div");
+    heading.className = "macro-step-heading";
+    const title = document.createElement("strong");
+    title.textContent = `ステップ ${index + 1}`;
+    const summary = document.createElement("span");
+    const labels = macroInputLabels(step.inputMask);
+    summary.textContent = `${step.durationMs} ms · ${labels.length > 0 ? labels.join(" + ") : "入力なし"}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "削除";
+    remove.disabled = busy;
+    remove.addEventListener("click", () => {
+      if (!macroDraftRecord) return;
+      macroDraftRecord.splice(10 + index * 10, 10);
+      syncMacroRawFromDraft();
+      renderMacroSteps(macroDraftRecord);
+      syncActions();
+    });
+    heading.append(title, summary, remove);
+    card.append(heading);
+
+    const basic = document.createElement("div");
+    basic.className = "macro-step-basic";
+    const durationLabel = document.createElement("label");
+    durationLabel.textContent = "時間 (ms)";
+    const duration = document.createElement("input");
+    duration.type = "number";
+    duration.min = "0";
+    duration.max = "32760";
+    duration.step = "8";
+    duration.value = String(step.durationMs);
+    duration.addEventListener("change", () => {
+      const value = Number(duration.value);
+      if (Number.isFinite(value)) commitMacroStep(index, { durationMs: Math.max(0, Math.min(32760, value)) });
+    });
+    durationLabel.append(duration);
+    const markerLabel = document.createElement("label");
+    markerLabel.className = "macro-check";
+    const marker = document.createElement("input");
+    marker.type = "checkbox";
+    marker.checked = step.marker;
+    marker.addEventListener("change", () => commitMacroStep(index, { marker: marker.checked }));
+    markerLabel.append(marker, document.createTextNode("前の入力状態を引き継ぐ"));
+    basic.append(durationLabel, markerLabel);
+    card.append(basic);
+
+    const inputTitle = document.createElement("p");
+    inputTitle.className = "macro-subheading";
+    inputTitle.textContent = "コントローラー入力（複数選択可）";
+    card.append(inputTitle);
+    const keyGrid = document.createElement("div");
+    keyGrid.className = "macro-key-grid";
+    for (const [label, mask] of MACRO_INPUT_OPTIONS) {
+      const key = document.createElement("button");
+      key.type = "button";
+      key.className = "macro-key-toggle";
+      const active = ((((step.inputMask >>> 0) & mask) >>> 0) === mask);
+      key.classList.toggle("active", active);
+      key.setAttribute("aria-pressed", String(active));
+      key.textContent = label;
+      key.addEventListener("click", () => {
+        const current = readMacroStep(macroDraftRecord ?? record, index);
+        const nextMask = active
+          ? ((current.inputMask & ~mask) >>> 0)
+          : ((current.inputMask | mask) >>> 0);
+        commitMacroStep(index, { inputMask: nextMask });
+      });
+      keyGrid.append(key);
+    }
+    card.append(keyGrid);
+
+    const otherLabel = document.createElement("label");
+    otherLabel.className = "macro-other-mask";
+    otherLabel.textContent = "その他マスク（上級者向け）";
+    const other = document.createElement("input");
+    other.type = "text";
+    other.value = `0x${((step.inputMask & ~MACRO_KNOWN_MASK) >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
+    other.addEventListener("change", () => {
+      try {
+        const current = readMacroStep(macroDraftRecord ?? record, index);
+        commitMacroStep(index, { inputMask: (((current.inputMask & MACRO_KNOWN_MASK) | parseMacroMask(other.value)) >>> 0) });
+      } catch (error) {
+        setMessage(errorMessage(error));
+      }
+    });
+    otherLabel.append(other);
+    card.append(otherLabel);
+
+    const analogTitle = document.createElement("p");
+    analogTitle.className = "macro-subheading";
+    analogTitle.textContent = "スティック（-128〜127）";
+    card.append(analogTitle);
+    const analogGrid = document.createElement("div");
+    analogGrid.className = "macro-analog-grid";
+    const analogLabels = ["左 X", "左 Y", "右 X", "右 Y"];
+    analogLabels.forEach((label, analogIndex) => {
+      const field = document.createElement("label");
+      field.textContent = label;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "-128";
+      input.max = "127";
+      input.value = String(step.analog[analogIndex]);
+      input.addEventListener("change", () => {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        const analog = [...readMacroStep(macroDraftRecord ?? record, index).analog] as MacroStep["analog"];
+        analog[analogIndex] = Math.max(-128, Math.min(127, Math.round(value)));
+        commitMacroStep(index, { analog });
+      });
+      field.append(input);
+      analogGrid.append(field);
+    });
+    card.append(analogGrid);
+    container.append(card);
+  }
+}
+
+function addMacroStep() {
+  if (!macroDraftRecord) return;
+  if (macroStepCount(macroDraftRecord) >= 64) {
+    setMessage("マクロは最大64ステップです。");
+    return;
+  }
+  macroDraftRecord.push(0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+  syncMacroRawFromDraft();
+  renderMacroSteps(macroDraftRecord);
+  syncActions();
+}
+
+function selectMacroSlot(slot: number) {
+  const selected = macroSummary?.slots.find((entry) => entry.slot === slot);
+  if (!selected) return;
+  byId<HTMLSelectElement>("macro-slot").value = String(slot);
+  byId("macro-editor-title").textContent = `スロット ${slot + 1} の編集`;
+  macroDraftRecord = selected.rawRecord.length >= 10 ? selected.rawRecord.slice() : null;
+  if (macroDraftRecord) {
+    renderMacroHeader(macroDraftRecord);
+    syncMacroRawFromDraft();
+  }
+  renderMacroSteps(macroDraftRecord);
+  byId("macro-slot-details").textContent = selected.error
+    ? `${macroSlotDescription(selected)}: ${selected.error}`
+    : `${macroSlotDescription(selected)} / ${selected.activeLength} bytes / CRC ${selected.crc}`;
+  syncActions();
+}
+
+function renderMacroSummary(summary: MacroSummary) {
+  macroSummary = summary;
+  const container = byId("macro-slots");
+  container.replaceChildren(
+    ...summary.slots.map((slot) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "macro-slot-card";
+      button.textContent = macroSlotDescription(slot);
+      button.classList.toggle("selected", slot.slot === Number(byId<HTMLSelectElement>("macro-slot").value));
+      button.addEventListener("click", () => selectMacroSlot(slot.slot));
+      return button;
+    }),
+  );
+  const current = Number(byId<HTMLSelectElement>("macro-slot").value);
+  selectMacroSlot(summary.slots.some((slot) => slot.slot === current) ? current : 0);
+  byId("macro-output").textContent = [
+    `D5: ${summary.listResponse}`,
+    ...summary.slots.map((slot) => `${macroSlotDescription(slot)} / length ${slot.activeLength} / CRC ${slot.crc}`),
+  ].join("\n");
+}
+
+async function refreshMacros() {
+  if (!deviceConnected) return;
+  setBusy(true, "マクロの4枠を読み込んでいます…");
+  try {
+    renderMacroSummary(await invoke<MacroSummary>("read_macros"));
+    setMessage("マクロ4枠を読み込みました。");
+  } catch (error) {
+    byId("macro-output").textContent = errorMessage(error);
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function writeMacro() {
+  if (!deviceConnected) return;
+  try {
+    const slot = Number(byId<HTMLSelectElement>("macro-slot").value);
+    const record = macroDraftRecord ? macroDraftRecord.slice() : parseMacroRecord(byId<HTMLTextAreaElement>("macro-raw").value);
+    syncFriendlyMacroHeader(record);
+    macroDraftRecord = record;
+    syncMacroRawFromDraft();
+    setBusy(true, `マクロ スロット${slot + 1}を保存し、実機で読み返しています…`);
+    const result = await invoke<MacroWriteResult>("write_macro", { slot, rawRecord: record });
+    if (macroSummary) {
+      macroSummary = {
+        ...macroSummary,
+        slots: macroSummary.slots.map((entry) => entry.slot === slot ? result.slot : entry),
+      };
+      renderMacroSummary(macroSummary);
+    }
+    byId("macro-output").textContent = `D8 ACK: ${result.ack} (${result.ackValue})\nD9 readback: ${macroSlotDescription(result.slot)}\nraw: ${formatBytes(result.slot.rawRecord)}`;
+    setMessage(`マクロ スロット${slot + 1}を保存しました。実機readback確認済みです。`);
+  } catch (error) {
+    byId("macro-output").textContent = errorMessage(error);
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+function renderAuxiliary(summary: AuxiliarySummary) {
+  const parsed = [
+    `UUID (EF): ${summary.uuid ?? "不明"}`,
+    `ZKM (0B): ${summary.zkm === null ? "不明" : `0x${summary.zkm.toString(16).padStart(2, "0").toUpperCase()}`}`,
+    ...summary.probes.map((probe) => `${probe.name} ${probe.command}: ${probe.response ?? probe.error ?? "no response"}`),
+  ];
+  byId("auxiliary-output").textContent = parsed.join("\n");
+  const unsupported = summary.probes.filter((probe) => probe.error?.toLowerCase().includes("unsupported")).length;
+  byId("auxiliary-summary").textContent = `UUID: ${summary.uuid ?? "不明"} / ZKM: ${summary.zkm === null ? "不明" : `0x${summary.zkm.toString(16).padStart(2, "0").toUpperCase()}`} / LED取得: ${unsupported > 0 ? "この機種では未対応" : "応答あり"}`;
+}
+
+async function refreshAuxiliary() {
+  if (!deviceConnected) return;
+  setBusy(true, "デバイス状態を確認しています…");
+  try {
+    const summary = await invoke<AuxiliarySummary>("read_auxiliary");
+    renderAuxiliary(summary);
+    setMessage("デバイス状態を確認しました。");
+  } catch (error) {
+    byId("auxiliary-output").textContent = errorMessage(error);
+    byId("auxiliary-summary").textContent = "デバイス状態の確認に失敗しました。詳細を開いてください。";
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+function parseColor(value: string): number[] {
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (!match) throw new Error("LEDの色を選択してください");
+  return [
+    Number.parseInt(match[1].slice(0, 2), 16),
+    Number.parseInt(match[1].slice(2, 4), 16),
+    Number.parseInt(match[1].slice(4, 6), 16),
+  ];
+}
+
+function logoLedValues(): number[] {
+  return [1, 2, 3].flatMap((zone) => parseColor(byId<HTMLInputElement>(`logo-led-color-${zone}`).value));
+}
+
+function parseHexBytes(raw: string, expected: number): number[] {
+  const compact = raw.replace(/[^0-9a-f]/gi, "");
+  if (compact.length !== expected * 2) {
+    throw new Error(`expected exactly ${expected} hexadecimal byte(s)`);
+  }
+  return compact.match(/../g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
+}
+
+async function writeAuxiliary(kind: string, raw: string, expected: number) {
+  if (!deviceConnected) return;
+  try {
+    const values = parseHexBytes(raw, expected);
+    const labels: Record<string, string> = {
+      "logo-led": "ロゴLED",
+      "led-brightness": "明るさ",
+      "lighting-mode": "点灯モード",
+    };
+    setBusy(true, `${labels[kind] ?? kind}を送信しています…`);
+    const result = await invoke<AuxiliaryWriteResult>("write_auxiliary", { kind, values });
+    byId("auxiliary-output").textContent = `${kind}\nrequest: ${result.request}\nresponse: ${result.response ?? "no response (no-wait setter)"}`;
+    byId("auxiliary-summary").textContent = `${labels[kind] ?? kind}を送信しました。${result.response ? "応答を受信しました。" : "この設定コマンドは応答を待ちません。"}`;
+    setMessage(`${labels[kind] ?? kind}を送信しました。`);
+  } catch (error) {
+    byId("auxiliary-output").textContent = errorMessage(error);
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
 function updateKeymapDialogSelection() {
   const selected = keymapChoiceKey(pendingKeymapChoice);
   document.querySelectorAll<HTMLButtonElement>("[data-keymap-choice]").forEach((button) => {
@@ -758,6 +1389,66 @@ function renderKeymapChoiceButtons() {
     }),
   );
 
+  const modifierSelect = byId<HTMLSelectElement>("keymap-keyboard-modifier");
+  modifierSelect.replaceChildren(
+    ...KEYBOARD_MODIFIERS.map(([label, value]) => {
+      const option = document.createElement("option");
+      option.value = String(value);
+      option.textContent = `${label} (0x${value.toString(16).padStart(2, "0").toUpperCase()})`;
+      return option;
+    }),
+  );
+  const secondSelect = byId<HTMLSelectElement>("keymap-keyboard-second");
+  secondSelect.replaceChildren(
+    (() => {
+      const option = document.createElement("option");
+      option.value = "0";
+      option.textContent = "None";
+      return option;
+    })(),
+    ...KEYBOARD_KEYS.map(([label, usage]) => {
+      const option = document.createElement("option");
+      option.value = String(usage);
+      option.textContent = `${label} (0x${usage.toString(16).padStart(2, "0").toUpperCase()})`;
+      return option;
+    }),
+  );
+  if (pendingKeymapChoice?.kind === "keyboard") {
+    modifierSelect.value = String(pendingKeymapChoice.modifier);
+    secondSelect.value = String(pendingKeymapChoice.secondUsage);
+  } else {
+    modifierSelect.value = "0";
+    secondSelect.value = "0";
+  }
+  const keyboardChoiceWithControls = (usage: number, label: string): KeymapChoice => {
+    const modifier = Number(modifierSelect.value);
+    const secondUsage = Number(secondSelect.value);
+    const secondLabel = KEYBOARD_KEYS.find(([, candidate]) => candidate === secondUsage)?.[0];
+    return {
+      kind: "keyboard",
+      modifier,
+      usage,
+      secondUsage,
+      label: `${KEYBOARD_MODIFIERS.find(([, value]) => value === modifier)?.[0] === "None" ? "" : `${KEYBOARD_MODIFIERS.find(([, value]) => value === modifier)?.[0]} + `}${label}${secondLabel ? ` + ${secondLabel}` : ""}`,
+    };
+  };
+  modifierSelect.onchange = () => {
+    const current = pendingKeymapChoice;
+    if (current?.kind === "keyboard") {
+      const key = KEYBOARD_KEYS.find(([, usage]) => usage === current.usage) ?? KEYBOARD_KEYS[0];
+      pendingKeymapChoice = keyboardChoiceWithControls(key[1], key[0]);
+      updateKeymapDialogSelection();
+    }
+  };
+  secondSelect.onchange = () => {
+    const current = pendingKeymapChoice;
+    if (current?.kind === "keyboard") {
+      const key = KEYBOARD_KEYS.find(([, usage]) => usage === current.usage) ?? KEYBOARD_KEYS[0];
+      pendingKeymapChoice = keyboardChoiceWithControls(key[1], key[0]);
+      updateKeymapDialogSelection();
+    }
+  };
+
   const keyboardContainer = byId("keymap-keyboard-grid");
   keyboardContainer.replaceChildren(
     ...KEYBOARD_KEYS.map(([label, usage]) => {
@@ -765,10 +1456,9 @@ function renderKeymapChoiceButtons() {
       button.className = "key-choice";
       button.type = "button";
       button.textContent = label;
-      const choice: KeymapChoice = { kind: "keyboard", usage, label };
-      button.dataset.keymapChoice = keymapChoiceKey(choice);
+      button.dataset.keymapChoice = `keyboard:${usage}`;
       button.addEventListener("click", () => {
-        pendingKeymapChoice = choice;
+        pendingKeymapChoice = keyboardChoiceWithControls(usage, label);
         updateKeymapDialogSelection();
       });
       return button;
@@ -942,7 +1632,13 @@ function readSettingsInput(): ControllerSettingsInput {
     rectangleAlgorithm: byId<HTMLInputElement>("rectangle-algorithm").checked,
     leftStick: cloneCurve(curveDrafts.leftStick),
     rightStick: cloneCurve(curveDrafts.rightStick),
-    rapidFire: { m2: rapidFireDraft.m2 },
+    rapidFire: {
+      m1: rapidFireDraft.m1,
+      m2: rapidFireDraft.m2,
+      m3: rapidFireDraft.m3,
+      m4: rapidFireDraft.m4,
+      speedIndex: rapidFireDraft.speedIndex ?? null,
+    },
     keyBindings: readKeymap(),
   };
 }
@@ -960,7 +1656,11 @@ function settingsEqual(settings: ControllerSettings, input: ControllerSettingsIn
   return settings.rectangleAlgorithm === input.rectangleAlgorithm
     && curvesEqual(settings.leftStick, input.leftStick)
     && curvesEqual(settings.rightStick, input.rightStick)
+    && settings.rapidFire.m1 === input.rapidFire.m1
     && settings.rapidFire.m2 === input.rapidFire.m2
+    && settings.rapidFire.m3 === input.rapidFire.m3
+    && settings.rapidFire.m4 === input.rapidFire.m4
+    && settings.rapidFireSpeedIndex === input.rapidFire.speedIndex
     && settings.keyBindings.length === input.keyBindings.length
     && settings.keyBindings.every((value, index) => value.toUpperCase() === input.keyBindings[index].toUpperCase());
 }
@@ -1057,7 +1757,13 @@ function renderSettings(profile: ProfileSummary) {
     leftStick: cloneCurve(settings.leftStick),
     rightStick: cloneCurve(settings.rightStick),
   };
-  renderKeymap(settings.keyBindings, settings.rapidFire);
+  const rapidFire = {
+    ...settings.rapidFire,
+    speedIndex: settings.rapidFireSpeedIndex,
+    timing: settings.rapidFireTiming,
+  };
+  renderKeymap(settings.keyBindings, rapidFire);
+  renderRapidFireControls(rapidFire);
   selectedStick = "leftStick";
   byId<HTMLInputElement>("rectangle-algorithm").checked = settings.rectangleAlgorithm;
   setActiveCurve(cloneCurve(curveDrafts.leftStick));
@@ -1089,22 +1795,25 @@ function showView(view: "home" | "settings") {
   const settingsVisible = view === "settings";
   byId("home-view").hidden = settingsVisible;
   byId("settings-view").hidden = !settingsVisible;
+  byId("message").hidden = !settingsVisible;
   if (settingsVisible && currentProfile) {
     renderSettings(currentProfile);
     selectSettingsTab("stick");
   }
 }
 
-function selectSettingsTab(tab: "stick" | "keymap" | "device" | "vibration") {
+function selectSettingsTab(tab: "stick" | "keymap" | "device" | "vibration" | "macro") {
   const stickVisible = tab === "stick";
   byId("settings-stick-section").hidden = !stickVisible;
   byId("settings-keymap-section").hidden = tab !== "keymap";
   byId("settings-device-section").hidden = tab !== "device";
   byId("settings-vibration-section").hidden = tab !== "vibration";
+  byId("settings-macro-section").hidden = tab !== "macro";
   byId("tab-stick").classList.toggle("active", stickVisible);
   byId("tab-keymap").classList.toggle("active", tab === "keymap");
   byId("tab-device").classList.toggle("active", tab === "device");
   byId("tab-vibration").classList.toggle("active", tab === "vibration");
+  byId("tab-macro").classList.toggle("active", tab === "macro");
 }
 
 async function scan() {
@@ -1117,7 +1826,7 @@ async function scan() {
       showView("home");
       setMessage("コントローラーを接続して再検索してください。");
     } else {
-      setMessage("接続済みです。プロファイルを読み込んでください。");
+      await readProfile(false);
     }
   } catch (error) {
     setConnection(null);
@@ -1164,7 +1873,7 @@ async function importProfileFile(file: File) {
     renderProfile(profile);
     renderSettings(profile);
     showView("settings");
-    setMessage("公式v37プロファイルを読み込みました。実機へ適用する場合は概要の適用ボタンを押してください。");
+    setMessage("公式v37プロファイルを読み込みました。実機へ適用できます。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1287,8 +1996,6 @@ async function saveDeviceSettings() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  byId("scan").addEventListener("click", () => void scan());
-  byId("read").addEventListener("click", () => void readProfile());
   byId("open-settings").addEventListener("click", () => {
     if (currentProfile) {
       showView("settings");
@@ -1308,10 +2015,72 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("save-vibration").addEventListener("click", () => void saveVibration());
   byId("save-device-settings").addEventListener("click", () => void saveDeviceSettings());
   byId("refresh-device-settings").addEventListener("click", () => void refreshDeviceSettings());
+  byId("refresh-macros").addEventListener("click", () => void refreshMacros());
+  byId("write-macro").addEventListener("click", () => void writeMacro());
+  byId("apply-macro-header").addEventListener("click", applyMacroHeader);
+  byId("refresh-auxiliary").addEventListener("click", () => void refreshAuxiliary());
+  byId("write-logo-led").addEventListener("click", () => {
+    try {
+      void writeAuxiliary("logo-led", formatBytes(logoLedValues()), 9);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  });
+  byId<HTMLInputElement>("led-brightness").addEventListener("input", (event) => {
+    const value = Number((event.target as HTMLInputElement).value);
+    byId("led-brightness-value").textContent = String(value);
+  });
+  byId("write-led-brightness").addEventListener("click", () => {
+    const value = Number(byId<HTMLInputElement>("led-brightness").value);
+    void writeAuxiliary("led-brightness", value.toString(16).padStart(2, "0"), 1);
+  });
+  byId("write-lighting-mode").addEventListener("click", () => void writeAuxiliary("lighting-mode", byId<HTMLInputElement>("lighting-mode").value, 1));
   byId("tab-stick").addEventListener("click", () => selectSettingsTab("stick"));
   byId("tab-keymap").addEventListener("click", () => selectSettingsTab("keymap"));
   byId("tab-device").addEventListener("click", () => selectSettingsTab("device"));
   byId("tab-vibration").addEventListener("click", () => selectSettingsTab("vibration"));
+  byId("tab-macro").addEventListener("click", () => selectSettingsTab("macro"));
+  for (const [key, id] of [
+    ["m1", "rapid-m1"],
+    ["m2", "rapid-m2"],
+    ["m3", "rapid-m3"],
+    ["m4", "rapid-m4"],
+  ] as const) {
+    byId<HTMLInputElement>(id).addEventListener("change", (event) => {
+      rapidFireDraft[key] = (event.target as HTMLInputElement).checked;
+      renderKeymapRows();
+      markSettingsDirty();
+    });
+  }
+  byId<HTMLSelectElement>("rapid-speed").addEventListener("change", (event) => {
+    const value = (event.target as HTMLSelectElement).value;
+    rapidFireDraft.speedIndex = value === "unknown" ? null : Number(value);
+    renderRapidFireControls(rapidFireDraft);
+    markSettingsDirty();
+  });
+  byId<HTMLSelectElement>("macro-slot").addEventListener("change", (event) => {
+    selectMacroSlot(Number((event.target as HTMLSelectElement).value));
+  });
+  byId("add-macro-step").addEventListener("click", addMacroStep);
+  for (const id of [
+    "macro-run-key-select",
+    "macro-m-key-select",
+    "macro-repeat",
+    "macro-run-after-release",
+    "macro-loop",
+  ] as const) {
+    byId(id).addEventListener("change", () => {
+      if (!macroDraftRecord) return;
+      try {
+        syncFriendlyMacroHeader(macroDraftRecord);
+        syncMacroRawFromDraft();
+        renderMacroHeader(macroDraftRecord);
+        byId("macro-slot-details").textContent = `スロット ${Number(byId<HTMLSelectElement>("macro-slot").value) + 1}を編集中です。保存時にCRCを再計算します。`;
+      } catch (error) {
+        setMessage(errorMessage(error));
+      }
+    });
+  }
   byId("keymap-controller-tab").addEventListener("click", () => setKeymapDialogMode("controller"));
   byId("keymap-keyboard-tab").addEventListener("click", () => setKeymapDialogMode("keyboard"));
   byId("keymap-dialog-close").addEventListener("click", closeKeymapDialog);

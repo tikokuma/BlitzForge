@@ -11,18 +11,26 @@ pub const V37_RIGHT_VIBRATION_MAX_OFFSET: usize = 0x14d;
 pub const V37_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00c;
 pub const V37_LEFT_DEFAULT_CURVE_OFFSET: usize = 0x00e;
 pub const V37_RIGHT_DEFAULT_CURVE_OFFSET: usize = 0x03a;
-pub const V37_M2_RAPID_FIRE_OFFSET: usize = 0x140;
-pub const V37_M1_RAPID_FIRE_OFFSET: usize = 0x146;
+pub const V37_TURBO_KEY_MASK_OFFSET: usize = 0x140;
+pub const V37_TURBO_SPEED_INDEX_OFFSET: usize = 0x144;
 const V37_TURBO_KEY_MASK_LENGTH: usize = 4;
-const V37_M2_RAPID_FIRE_BIT: u8 = 0x01;
+pub const V37_M1_TURBO_MASK: u32 = 0x0080_0000;
+pub const V37_M2_TURBO_MASK: u32 = 0x0100_0000;
+pub const V37_M3_TURBO_MASK: u32 = 0x0200_0000;
+pub const V37_M4_TURBO_MASK: u32 = 0x0400_0000;
 pub const V37_KEYMAP_OFFSET: usize = 0x164;
 pub const V37_KEYMAP_ENTRY_COUNT: usize = 32;
 pub const V37_KEYMAP_ENTRY_LENGTH: usize = 4;
+pub const MACRO_SLOT_COUNT: usize = 4;
+pub const MACRO_HEADER_LENGTH: usize = 10;
+pub const MACRO_STEP_LENGTH: usize = 10;
+pub const MACRO_MAX_LENGTH: usize = 0x294;
 
 const GET_BASE_PROFILE: [u8; 4] = [0xa5, 0x04, 0xd6, 0x7f];
 const GET_PROFILE_SIZE: [u8; 4] = [0xa5, 0x04, 0xd3, 0x7c];
 const GET_POLLING_RATE: [u8; 4] = [0xa5, 0x04, 0xf6, 0x9f];
 const GET_STEP_ACCURACY: [u8; 4] = [0xa5, 0x04, 0xf7, 0x0a];
+const GET_MACRO_LIST: [u8; 4] = [0xa5, 0x04, 0xd5, 0x7e];
 
 pub struct ReadFragment {
     pub sequence: u8,
@@ -65,6 +73,20 @@ pub struct RapidFireSettings {
     pub m2: Option<bool>,
     pub m3: Option<bool>,
     pub m4: Option<bool>,
+    pub speed_index: Option<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MacroListEntry {
+    pub crc: u16,
+    pub active_length: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RapidFireTiming {
+    pub period_ms: u16,
+    pub half_period_ms: u16,
+    pub hz: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -82,6 +104,80 @@ pub fn get_polling_rate_report() -> Vec<u8> {
 
 pub fn get_step_accuracy_report() -> Vec<u8> {
     command_report(&GET_STEP_ACCURACY)
+}
+
+pub fn get_macro_list_report() -> Vec<u8> {
+    command_report(&GET_MACRO_LIST)
+}
+
+pub fn get_macro_info_report(slot: u8) -> Result<Vec<u8>, String> {
+    if usize::from(slot) >= MACRO_SLOT_COUNT {
+        return Err(format!("macro slot must be 0..{}", MACRO_SLOT_COUNT - 1));
+    }
+    let checksum = 0xa5_u8
+        .wrapping_add(0x05)
+        .wrapping_add(0xd9)
+        .wrapping_add(slot);
+    Ok(command_report(&[0xa5, 0x05, 0xd9, slot, checksum]))
+}
+
+pub fn get_uuid_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x0c, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0xa0])
+}
+
+pub fn get_zkm_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0x0b, 0xb4])
+}
+
+pub fn get_smart_trigger_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0xf8, 0xa1])
+}
+
+pub fn get_logo_led_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0xf5, 0x9e])
+}
+
+pub fn get_led_brightness_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0x72, 0x1b])
+}
+
+pub fn get_led_show_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0x70, 0x19])
+}
+
+pub fn get_lighting_mode_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0x73, 0x1c])
+}
+
+pub fn get_device_mode_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0xe1, 0x8a])
+}
+
+pub fn get_power_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0xad, 0x56])
+}
+
+pub fn get_wireless_flag_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0xfa, 0xa3])
+}
+
+pub fn get_gamepad_mode_report() -> Vec<u8> {
+    command_report(&[0xa5, 0x04, 0xd4, 0x7d])
+}
+
+pub fn build_set_logo_led_report(colors: [u8; 9]) -> Vec<u8> {
+    let mut logical = vec![0xa5, 0x0d, 0xf5];
+    logical.extend_from_slice(&colors);
+    logical.push(byte_sum(&logical));
+    command_report(&logical)
+}
+
+pub fn build_set_led_brightness_report(value: u8) -> Vec<u8> {
+    command_report(&[0xa5, 0x05, 0x72, value, value.wrapping_add(0x1c)])
+}
+
+pub fn build_set_lighting_mode_report(mode: u8) -> Vec<u8> {
+    command_report(&[0xa5, 0x05, 0x73, mode, mode.wrapping_add(0x1d)])
 }
 
 pub fn build_set_polling_rate_report(value: u8) -> Vec<u8> {
@@ -258,20 +354,39 @@ pub fn rapid_fire_settings(profile: &[u8]) -> Result<RapidFireSettings, String> 
     if profile.len() != V37_PROFILE_LENGTH {
         return Err("expected a 484-byte v37 profile".into());
     }
+    let mask = turbo_key_mask(profile)?;
     Ok(RapidFireSettings {
-        m1: decode_rapid_fire_byte(profile[V37_M1_RAPID_FIRE_OFFSET], 0x80),
-        m2: Some(profile[V37_M2_RAPID_FIRE_OFFSET] & V37_M2_RAPID_FIRE_BIT != 0),
-        m3: None,
-        m4: None,
+        m1: Some(mask & V37_M1_TURBO_MASK != 0),
+        m2: Some(mask & V37_M2_TURBO_MASK != 0),
+        m3: Some(mask & V37_M3_TURBO_MASK != 0),
+        m4: Some(mask & V37_M4_TURBO_MASK != 0),
+        speed_index: Some(profile[V37_TURBO_SPEED_INDEX_OFFSET]),
     })
 }
 
-fn decode_rapid_fire_byte(value: u8, enabled_value: u8) -> Option<bool> {
-    match value {
-        0 => Some(false),
-        value if value == enabled_value => Some(true),
-        _ => None,
+pub fn turbo_key_mask(profile: &[u8]) -> Result<u32, String> {
+    if profile.len() != V37_PROFILE_LENGTH {
+        return Err("expected a 484-byte v37 profile".into());
     }
+    Ok(u32::from_be_bytes(
+        profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4]
+            .try_into()
+            .expect("four-byte turbo mask slice"),
+    ))
+}
+
+pub fn rapid_fire_timing(index: u8) -> Option<RapidFireTiming> {
+    let period_ms = match index {
+        0 => 200,
+        1 => 100,
+        2 => 50,
+        _ => return None,
+    };
+    Some(RapidFireTiming {
+        period_ms,
+        half_period_ms: period_ms / 2,
+        hz: (1000 / u16::from(period_ms)) as u8,
+    })
 }
 
 pub fn set_controller_settings(
@@ -299,20 +414,38 @@ pub fn set_controller_settings(
         "right",
     )?;
     write_key_bindings(profile, key_bindings)?;
-    if let Some(enabled) = rapid_fire.m2 {
-        set_m2_rapid_fire(profile, enabled);
+    for (enabled, mask) in [
+        (rapid_fire.m1, V37_M1_TURBO_MASK),
+        (rapid_fire.m2, V37_M2_TURBO_MASK),
+        (rapid_fire.m3, V37_M3_TURBO_MASK),
+        (rapid_fire.m4, V37_M4_TURBO_MASK),
+    ] {
+        if let Some(enabled) = enabled {
+            set_turbo_key_bit(profile, mask, enabled);
+        }
+    }
+    if let Some(speed_index) = rapid_fire.speed_index {
+        if rapid_fire_timing(speed_index).is_none() {
+            return Err(format!("unsupported rapid-fire speed index {speed_index}"));
+        }
+        profile[V37_TURBO_SPEED_INDEX_OFFSET] = speed_index;
     }
     Ok(())
 }
 
-fn set_m2_rapid_fire(profile: &mut [u8], enabled: bool) {
-    let mask = &mut profile
-        [V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + V37_TURBO_KEY_MASK_LENGTH];
+fn set_turbo_key_bit(profile: &mut [u8], bit: u32, enabled: bool) {
+    let mut mask = u32::from_be_bytes(
+        profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + V37_TURBO_KEY_MASK_LENGTH]
+            .try_into()
+            .expect("four-byte turbo mask slice"),
+    );
     if enabled {
-        mask[0] |= V37_M2_RAPID_FIRE_BIT;
+        mask |= bit;
     } else {
-        mask[0] &= !V37_M2_RAPID_FIRE_BIT;
+        mask &= !bit;
     }
+    profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + V37_TURBO_KEY_MASK_LENGTH]
+        .copy_from_slice(&mask.to_be_bytes());
 }
 
 fn read_key_bindings(profile: &[u8]) -> [[u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT] {
@@ -496,6 +629,134 @@ pub fn validate_set_profile_ack(report: &[u8]) -> Result<u8, String> {
     Ok(wire[3])
 }
 
+pub fn decode_macro_list(report: &[u8]) -> Result<Vec<MacroListEntry>, String> {
+    let payload = short_command_payload(report, 0xd5)?;
+    if payload.len() != MACRO_SLOT_COUNT * 4 {
+        return Err(format!("unexpected D5 payload length {}", payload.len()));
+    }
+    Ok(payload
+        .chunks_exact(4)
+        .map(|entry| MacroListEntry {
+            crc: u16::from_be_bytes([entry[0], entry[1]]),
+            active_length: usize::from(u16::from_be_bytes([entry[2], entry[3]])),
+        })
+        .collect())
+}
+
+pub fn decode_macro_info(report: &[u8]) -> Result<Vec<u8>, String> {
+    let payload = short_command_payload(report, 0xd9)?;
+    if payload.len() < MACRO_HEADER_LENGTH {
+        return Err("D9 response does not contain a macro header".into());
+    }
+    let active_length = usize::from(u16::from_be_bytes([payload[2], payload[3]]));
+    if active_length != payload.len() {
+        return Err(format!(
+            "D9 response contains {} bytes but declares {active_length}",
+            payload.len()
+        ));
+    }
+    if !(MACRO_HEADER_LENGTH..=MACRO_MAX_LENGTH).contains(&active_length)
+        || (active_length - MACRO_HEADER_LENGTH) % MACRO_STEP_LENGTH != 0
+    {
+        return Err(format!("invalid D9 macro length 0x{active_length:04X}"));
+    }
+    Ok(payload.to_vec())
+}
+
+pub fn normalize_macro_record(input: &[u8]) -> Result<Vec<u8>, String> {
+    if !(MACRO_HEADER_LENGTH..=MACRO_MAX_LENGTH).contains(&input.len())
+        || (input.len() - MACRO_HEADER_LENGTH) % MACRO_STEP_LENGTH != 0
+    {
+        return Err(format!(
+            "macro record must be 10 + 10*n bytes, got {}",
+            input.len()
+        ));
+    }
+    let mut record = input.to_vec();
+    let record_length = record.len();
+    record[2..4].copy_from_slice(&(record_length as u16).to_be_bytes());
+    let crc = macro_crc(&record)?;
+    record[..2].copy_from_slice(&crc.to_be_bytes());
+    Ok(record)
+}
+
+pub fn macro_crc(record: &[u8]) -> Result<u16, String> {
+    if record.len() < MACRO_HEADER_LENGTH {
+        return Err("macro record is too short".into());
+    }
+    let mut crc = 0xffff_u16;
+    for &value in &record[2..] {
+        crc ^= u16::from(value);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xa001
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    Ok(crc)
+}
+
+pub fn build_macro_write_reports(slot: u8, input: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    if usize::from(slot) >= MACRO_SLOT_COUNT {
+        return Err(format!("macro slot must be 0..{}", MACRO_SLOT_COUNT - 1));
+    }
+    let record = normalize_macro_record(input)?;
+    let mut logical = vec![0_u8; record.len() + 5];
+    logical[..2].copy_from_slice(&[0xa4, 0xd8]);
+    let wrapper_length = (record.len() as u16 + 1).to_le_bytes();
+    logical[2..4].copy_from_slice(&wrapper_length);
+    logical[4] = slot;
+    logical[5..7].copy_from_slice(&record[..2]);
+    logical[7..].copy_from_slice(&record[2..]);
+
+    let payload_capacity = HID_REPORT_LENGTH - 1 - 5;
+    let mut reports = Vec::with_capacity((logical.len() - 4).div_ceil(payload_capacity));
+    for (index, chunk) in logical[4..].chunks(payload_capacity).enumerate() {
+        let fragment_length = chunk.len() + 5;
+        let mut report = vec![0_u8; HID_REPORT_LENGTH];
+        report[1] = 0xa4;
+        report[2] = fragment_length as u8;
+        report[3] = 0xd8;
+        report[4] = (index + 1) as u8;
+        report[5..5 + chunk.len()].copy_from_slice(chunk);
+        report[fragment_length] = byte_sum(&report[1..fragment_length]);
+        reports.push(report);
+    }
+    Ok(reports)
+}
+
+pub fn validate_macro_write_ack(report: &[u8]) -> Result<u8, String> {
+    let wire = wire_bytes(report);
+    if wire.len() < 2 {
+        return Err("truncated macro D8 ACK".into());
+    }
+    let length = usize::from(wire[1]);
+    if length != 5 || wire.len() < length || wire[0] != 0xa5 || wire[2] != 0xd8 {
+        return Err("unexpected macro D8 ACK".into());
+    }
+    if byte_sum(&wire[..4]) != wire[4] {
+        return Err("invalid macro D8 ACK checksum".into());
+    }
+    Ok(wire[3])
+}
+
+pub fn decode_uuid(report: &[u8]) -> Result<[u8; 8], String> {
+    let payload = short_command_payload(report, 0xef)?;
+    payload
+        .try_into()
+        .map_err(|_| "UUID response does not contain eight bytes".to_string())
+}
+
+pub fn decode_zkm(report: &[u8]) -> Result<u8, String> {
+    let payload = short_command_payload(report, 0x0b)?;
+    payload
+        .first()
+        .copied()
+        .ok_or_else(|| "ZKM response has no version byte".into())
+}
+
 pub fn wire_bytes(report: &[u8]) -> &[u8] {
     if report.first() == Some(&0) {
         &report[1..]
@@ -676,6 +937,7 @@ mod tests {
                 m2: Some(false),
                 m3: None,
                 m4: None,
+                speed_index: None,
             },
         )
         .unwrap();
@@ -739,6 +1001,7 @@ mod tests {
                 m2: Some(false),
                 m3: None,
                 m4: None,
+                speed_index: None,
             },
         )
         .unwrap();
@@ -750,15 +1013,52 @@ mod tests {
     }
 
     #[test]
-    fn isolates_m2_rapid_fire_to_the_observed_byte() {
+    fn toggles_all_turbo_bits_and_preserves_unknown_bits() {
         let mut profile = profile();
-        profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 8] = 100;
-        profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 9] = 100;
-        profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 8] = 100;
-        profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 9] = 100;
-        let crc = profile_crc(&profile).unwrap();
-        profile[..2].copy_from_slice(&crc.to_be_bytes());
-        let original = profile.clone();
+        profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4]
+            .copy_from_slice(&[0x80, 0x22, 0x33, 0x44]);
+
+        set_controller_settings(
+            &mut profile,
+            false,
+            CurveSettings {
+                center: 0,
+                point1_x: 0,
+                point1_y: 0,
+                point2_x: 0,
+                point2_y: 0,
+                edge: 0,
+                stabilization: 0,
+            },
+            CurveSettings {
+                center: 0,
+                point1_x: 0,
+                point1_y: 0,
+                point2_x: 0,
+                point2_y: 0,
+                edge: 0,
+                stabilization: 0,
+            },
+            [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
+            RapidFireSettings {
+                m1: Some(true),
+                m2: Some(true),
+                m3: Some(true),
+                m4: Some(true),
+                speed_index: Some(2),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            &profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4],
+            &[0x87, 0xa2, 0x33, 0x44]
+        );
+        assert_eq!(profile[V37_TURBO_SPEED_INDEX_OFFSET], 2);
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m1, Some(true));
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(true));
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m3, Some(true));
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m4, Some(true));
+
         set_controller_settings(
             &mut profile,
             false,
@@ -783,44 +1083,100 @@ mod tests {
             [[0_u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
             RapidFireSettings {
                 m1: None,
-                m2: Some(true),
+                m2: Some(false),
                 m3: None,
                 m4: None,
+                speed_index: None,
             },
         )
         .unwrap();
-
-        assert_eq!(profile[V37_M2_RAPID_FIRE_OFFSET], 0x01);
         assert_eq!(
-            &profile[2..V37_M2_RAPID_FIRE_OFFSET],
-            &original[2..V37_M2_RAPID_FIRE_OFFSET]
+            &profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4],
+            &[0x86, 0xa2, 0x33, 0x44]
         );
-        assert_eq!(
-            &profile[V37_M2_RAPID_FIRE_OFFSET + 1..],
-            &original[V37_M2_RAPID_FIRE_OFFSET + 1..]
-        );
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(true));
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m1, Some(true));
+        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(false));
     }
 
     #[test]
-    fn toggles_only_m2_bit_in_turbo_key_mask() {
+    fn decodes_v33_turbo_mask_and_speed_table() {
         let mut profile = profile();
-        profile[V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + 4]
-            .copy_from_slice(&[0x80, 0x22, 0x33, 0x44]);
+        profile[V37_TURBO_KEY_MASK_OFFSET..V37_TURBO_KEY_MASK_OFFSET + 4]
+            .copy_from_slice(&[0x03, 0x80, 0x00, 0x00]);
 
-        set_m2_rapid_fire(&mut profile, true);
         assert_eq!(
-            &profile[V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + 4],
-            &[0x81, 0x22, 0x33, 0x44]
+            turbo_key_mask(&profile).unwrap(),
+            V37_M1_TURBO_MASK | V37_M2_TURBO_MASK | V37_M3_TURBO_MASK
         );
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(true));
+        assert_eq!(
+            rapid_fire_timing(0),
+            Some(RapidFireTiming {
+                period_ms: 200,
+                half_period_ms: 100,
+                hz: 5,
+            })
+        );
+        assert_eq!(
+            rapid_fire_timing(1),
+            Some(RapidFireTiming {
+                period_ms: 100,
+                half_period_ms: 50,
+                hz: 10,
+            })
+        );
+        assert_eq!(
+            rapid_fire_timing(2),
+            Some(RapidFireTiming {
+                period_ms: 50,
+                half_period_ms: 25,
+                hz: 20,
+            })
+        );
+        assert_eq!(rapid_fire_timing(3), None);
+    }
 
-        set_m2_rapid_fire(&mut profile, false);
+    #[test]
+    fn decodes_live_macro_headers_and_crc() {
+        let response = [
+            0, 0xa5, 0x0e, 0xd9, 0xdf, 0xed, 0x00, 0x0a, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x81,
+        ];
+        let record = decode_macro_info(&response).unwrap();
+        assert_eq!(record.len(), MACRO_HEADER_LENGTH);
+        assert_eq!(macro_crc(&record), Ok(0xdfed));
+        assert_eq!(record[6], 0x1f);
+    }
+
+    #[test]
+    fn builds_empty_macro_write_and_ack() {
+        let record = [0, 0, 0, 0, 0, 0, 0x1f, 0, 0, 0];
+        let reports = build_macro_write_reports(0, &record).unwrap();
+        assert_eq!(reports.len(), 1);
         assert_eq!(
-            &profile[V37_M2_RAPID_FIRE_OFFSET..V37_M2_RAPID_FIRE_OFFSET + 4],
-            &[0x80, 0x22, 0x33, 0x44]
+            reports[0][1..17],
+            [
+                0xa4, 0x10, 0xd8, 0x01, 0x00, 0xdf, 0xed, 0x00, 0x0a, 0x00, 0x00, 0x1f, 0x00, 0x00,
+                0x00, 0x82,
+            ]
         );
-        assert_eq!(rapid_fire_settings(&profile).unwrap().m2, Some(false));
+        assert_eq!(
+            validate_macro_write_ack(&[0, 0xa5, 5, 0xd8, 0, 0x82]),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn builds_auxiliary_led_setters() {
+        let logo = build_set_logo_led_report([0; 9]);
+        assert_eq!(wire_bytes(&logo)[..4], [0xa5, 0x0d, 0xf5, 0]);
+        assert_eq!(wire_bytes(&logo)[12], 0xa7);
+        assert_eq!(
+            &wire_bytes(&build_set_led_brightness_report(0x20))[..5],
+            [0xa5, 0x05, 0x72, 0x20, 0x3c,]
+        );
+        assert_eq!(
+            &wire_bytes(&build_set_lighting_mode_report(0x02))[..5],
+            [0xa5, 0x05, 0x73, 0x02, 0x1f,]
+        );
     }
 
     #[test]

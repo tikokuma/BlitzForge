@@ -62,6 +62,8 @@ pub struct ControllerSettingsSummary {
     left_stick: CurveSettingsSummary,
     right_stick: CurveSettingsSummary,
     rapid_fire: RapidFireSummary,
+    rapid_fire_speed_index: Option<u8>,
+    rapid_fire_timing: Option<RapidFireTimingSummary>,
     key_bindings: Vec<String>,
 }
 
@@ -85,10 +87,22 @@ pub struct RapidFireSummary {
     m4: Option<bool>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RapidFireTimingSummary {
+    period_ms: u16,
+    half_period_ms: u16,
+    hz: u8,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RapidFireInput {
+    m1: Option<bool>,
     m2: Option<bool>,
+    m3: Option<bool>,
+    m4: Option<bool>,
+    speed_index: Option<u8>,
 }
 
 #[derive(Clone, Serialize)]
@@ -179,6 +193,65 @@ pub struct DeviceSettingsWriteResult {
     settings: DeviceSettingsSummary,
     polling_command: String,
     step_accuracy_command: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroSlotSummary {
+    slot: u8,
+    crc: String,
+    active_length: usize,
+    step_count: usize,
+    setting: u8,
+    m_key: u8,
+    run_key: u8,
+    flags: u8,
+    repeat: u16,
+    raw_record: Vec<u8>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroSummary {
+    device: DeviceSummary,
+    list_response: String,
+    slots: Vec<MacroSlotSummary>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroWriteResult {
+    device: DeviceSummary,
+    slot: MacroSlotSummary,
+    ack: String,
+    ack_value: u8,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuxiliaryProbe {
+    name: String,
+    command: String,
+    response: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuxiliarySummary {
+    device: DeviceSummary,
+    uuid: Option<String>,
+    zkm: Option<u8>,
+    probes: Vec<AuxiliaryProbe>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuxiliaryWriteResult {
+    device: DeviceSummary,
+    request: String,
+    response: Option<String>,
 }
 
 pub fn scan_device() -> Result<Option<DeviceSummary>, String> {
@@ -291,10 +364,11 @@ pub fn set_controller_settings(
         right_stick.into_curve(),
         key_bindings,
         protocol::RapidFireSettings {
-            m1: None,
+            m1: rapid_fire.m1,
             m2: rapid_fire.m2,
-            m3: None,
-            m4: None,
+            m3: rapid_fire.m3,
+            m4: rapid_fire.m4,
+            speed_index: rapid_fire.speed_index,
         },
     )?;
     let crc = protocol::profile_crc(&profile)?;
@@ -366,6 +440,199 @@ pub fn set_device_settings(
         },
         polling_command: spaced_hex(&protocol::wire_bytes(&polling_report)),
         step_accuracy_command: spaced_hex(&protocol::wire_bytes(&step_accuracy_report)),
+    })
+}
+
+pub fn read_macros() -> Result<MacroSummary, String> {
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info(&api)
+        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let device_summary = summary(info);
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    let list = transact_short(&device, &protocol::get_macro_list_report(), 0xd5)?;
+    let entries = protocol::decode_macro_list(&list)?;
+    let mut slots = Vec::with_capacity(protocol::MACRO_SLOT_COUNT);
+    for (slot, entry) in entries.into_iter().enumerate() {
+        let slot_u8 = slot as u8;
+        let base = macro_slot_summary(slot_u8, entry.crc, entry.active_length, Vec::new(), None);
+        match protocol::get_macro_info_report(slot_u8)
+            .and_then(|request| transact_short(&device, &request, 0xd9))
+            .and_then(|response| protocol::decode_macro_info(&response))
+        {
+            Ok(record) => slots.push(macro_slot_summary(
+                slot_u8,
+                entry.crc,
+                entry.active_length,
+                record,
+                None,
+            )),
+            Err(error) => slots.push(MacroSlotSummary {
+                error: Some(error),
+                ..base
+            }),
+        }
+    }
+    Ok(MacroSummary {
+        device: device_summary,
+        list_response: spaced_hex(&list),
+        slots,
+    })
+}
+
+pub fn write_macro(slot: u8, raw_record: Vec<u8>) -> Result<MacroWriteResult, String> {
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info(&api)
+        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let device_summary = summary(info);
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    let normalized = protocol::normalize_macro_record(&raw_record)?;
+    for report in protocol::build_macro_write_reports(slot, &normalized)? {
+        write_report(&device, &report)?;
+    }
+    let mut ack = [0_u8; protocol::HID_REPORT_LENGTH];
+    let read = device
+        .read_timeout(&mut ack, 2_000)
+        .map_err(|error| error.to_string())?;
+    if read == 0 {
+        return Err("timed out waiting for macro D8 ACK".into());
+    }
+    let ack_wire = protocol::wire_bytes(&ack[..read]);
+    let ack_value = protocol::validate_macro_write_ack(ack_wire)?;
+    if ack_value != 0 {
+        return Err(format!("macro D8 returned status 0x{ack_value:02X}"));
+    }
+    let after_request = protocol::get_macro_info_report(slot)?;
+    let after_response = transact_short(&device, &after_request, 0xd9)?;
+    let after_record = protocol::decode_macro_info(&after_response)?;
+    Ok(MacroWriteResult {
+        device: device_summary,
+        slot: macro_slot_summary(
+            slot,
+            u16::from_be_bytes([after_record[0], after_record[1]]),
+            after_record.len(),
+            after_record,
+            None,
+        ),
+        ack: spaced_hex(&ack_wire[..usize::from(ack_wire[1])]),
+        ack_value,
+    })
+}
+
+pub fn read_auxiliary() -> Result<AuxiliarySummary, String> {
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info(&api)
+        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let device_summary = summary(info);
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    let probes = [
+        ("UUID EF", protocol::get_uuid_report(), 0xef),
+        ("ZKM 0B", protocol::get_zkm_report(), 0x0b),
+        ("Device mode E1", protocol::get_device_mode_report(), 0xe1),
+        ("Power AD", protocol::get_power_report(), 0xad),
+        ("Wireless FA", protocol::get_wireless_flag_report(), 0xfa),
+        ("Gamepad mode D4", protocol::get_gamepad_mode_report(), 0xd4),
+        (
+            "Smart/trigger F8",
+            protocol::get_smart_trigger_report(),
+            0xf8,
+        ),
+        ("Logo LED F5", protocol::get_logo_led_report(), 0xf5),
+        (
+            "LED brightness 72",
+            protocol::get_led_brightness_report(),
+            0x72,
+        ),
+        ("LED show 70", protocol::get_led_show_report(), 0x70),
+        (
+            "Lighting mode 73",
+            protocol::get_lighting_mode_report(),
+            0x73,
+        ),
+    ];
+    let mut uuid = None;
+    let mut zkm = None;
+    let mut results = Vec::with_capacity(probes.len());
+    for (name, request, command) in probes {
+        match transact_short(&device, &request, command) {
+            Ok(response) => {
+                if command == 0xef {
+                    uuid = protocol::decode_uuid(&response)
+                        .ok()
+                        .map(|value| spaced_hex(&value));
+                } else if command == 0x0b {
+                    zkm = protocol::decode_zkm(&response).ok();
+                }
+                results.push(AuxiliaryProbe {
+                    name: name.into(),
+                    command: format!("0x{command:02X}"),
+                    response: Some(spaced_hex(&response)),
+                    error: None,
+                });
+            }
+            Err(error) => results.push(AuxiliaryProbe {
+                name: name.into(),
+                command: format!("0x{command:02X}"),
+                response: None,
+                error: Some(error),
+            }),
+        }
+    }
+    Ok(AuxiliarySummary {
+        device: device_summary,
+        uuid,
+        zkm,
+        probes: results,
+    })
+}
+
+pub fn write_auxiliary(kind: String, values: Vec<u8>) -> Result<AuxiliaryWriteResult, String> {
+    let report = match kind.as_str() {
+        "logo-led" => {
+            let colors: [u8; 9] = values
+                .try_into()
+                .map_err(|_| "logo-led requires exactly 9 bytes".to_string())?;
+            protocol::build_set_logo_led_report(colors)
+        }
+        "led-brightness" => {
+            let value = values
+                .first()
+                .copied()
+                .filter(|_| values.len() == 1)
+                .ok_or_else(|| "led-brightness requires exactly 1 byte".to_string())?;
+            protocol::build_set_led_brightness_report(value)
+        }
+        "lighting-mode" => {
+            let value = values
+                .first()
+                .copied()
+                .filter(|_| values.len() == 1)
+                .ok_or_else(|| "lighting-mode requires exactly 1 byte".to_string())?;
+            protocol::build_set_lighting_mode_report(value)
+        }
+        _ => return Err(format!("unsupported auxiliary write kind: {kind}")),
+    };
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info(&api)
+        .ok_or_else(|| "BIGBIG WON config interface not found".to_string())?;
+    let device_summary = summary(info);
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    write_report(&device, &report)?;
+    let mut response = [0_u8; protocol::HID_REPORT_LENGTH];
+    let read = device
+        .read_timeout(&mut response, 300)
+        .map_err(|error| error.to_string())?;
+    Ok(AuxiliaryWriteResult {
+        device: device_summary,
+        request: spaced_hex(&protocol::wire_bytes(&report)),
+        response: (read > 0).then(|| spaced_hex(protocol::wire_bytes(&response[..read]))),
     })
 }
 
@@ -532,12 +799,59 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
             m3: settings.rapid_fire.m3,
             m4: settings.rapid_fire.m4,
         },
+        rapid_fire_speed_index: settings.rapid_fire.speed_index,
+        rapid_fire_timing: settings
+            .rapid_fire
+            .speed_index
+            .and_then(protocol::rapid_fire_timing)
+            .map(|timing| RapidFireTimingSummary {
+                period_ms: timing.period_ms,
+                half_period_ms: timing.half_period_ms,
+                hz: timing.hz,
+            }),
         key_bindings: settings
             .key_bindings
             .into_iter()
             .map(|entry| entry.iter().map(|byte| format!("{byte:02X}")).collect())
             .collect(),
     })
+}
+
+fn macro_slot_summary(
+    slot: u8,
+    listed_crc: u16,
+    listed_length: usize,
+    record: Vec<u8>,
+    error: Option<String>,
+) -> MacroSlotSummary {
+    let (crc, active_length, setting, m_key, run_key, flags, repeat) =
+        if record.len() >= protocol::MACRO_HEADER_LENGTH {
+            (
+                u16::from_be_bytes([record[0], record[1]]),
+                usize::from(u16::from_be_bytes([record[2], record[3]])),
+                record[4],
+                record[5],
+                record[6],
+                record[7],
+                u16::from_be_bytes([record[8], record[9]]),
+            )
+        } else {
+            (listed_crc, listed_length, 0, 0, 0, 0, 0)
+        };
+    MacroSlotSummary {
+        slot,
+        crc: format!("{crc:04X}"),
+        active_length,
+        step_count: active_length.saturating_sub(protocol::MACRO_HEADER_LENGTH)
+            / protocol::MACRO_STEP_LENGTH,
+        setting,
+        m_key,
+        run_key,
+        flags,
+        repeat,
+        raw_record: record,
+        error,
+    }
 }
 
 fn vibration_summary(settings: protocol::VibrationSettings) -> VibrationSettingsSummary {
@@ -592,6 +906,82 @@ fn parse_key_bindings(
         }
     }
     Ok(bindings)
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a connected BIGBIG WON controller"]
+    fn live_macro_and_auxiliary_round_trip() {
+        let macros = read_macros().expect("D5/D9 macro read");
+        let slot0 = macros
+            .slots
+            .first()
+            .expect("macro slot 0")
+            .raw_record
+            .clone();
+        assert!(!slot0.is_empty(), "slot 0 D9 record must be present");
+        let written = write_macro(0, slot0).expect("D8/D9 same-content round trip");
+        assert_eq!(written.ack_value, 0);
+        let auxiliary = read_auxiliary().expect("auxiliary HID probes");
+        assert!(
+            auxiliary
+                .probes
+                .iter()
+                .any(|probe| probe.command == "0xEF" && probe.response.is_some())
+        );
+        assert!(
+            auxiliary
+                .probes
+                .iter()
+                .any(|probe| probe.command == "0x0B" && probe.response.is_some())
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a connected BIGBIG WON controller"]
+    fn live_probe_one_macro_step_and_restore_empty_slot() {
+        let macros = read_macros().expect("initial D5/D9 macro read");
+        let (slot, original) = macros
+            .slots
+            .iter()
+            .find(|slot| {
+                slot.step_count == 0 && slot.raw_record.len() == protocol::MACRO_HEADER_LENGTH
+            })
+            .map(|slot| (slot.slot, slot.raw_record.clone()))
+            .expect("an empty macro slot is required for the reversible probe");
+
+        let mut probe = original.clone();
+        probe[4..10].copy_from_slice(&[0xA5, 0x5A, 0x1F, 0x03, 0x12, 0x34]);
+        probe.extend_from_slice(&[0x50, 0x00, 0x12, 0x34, 0x56, 0x78, 0x11, 0x22, 0x33, 0x44]);
+        let expected_probe =
+            protocol::normalize_macro_record(&probe).expect("normalize one-step probe record");
+        let written = write_macro(slot, probe).expect("D8 one-step write and D9 readback");
+        println!(
+            "probe slot={} ack={} raw={}",
+            slot,
+            written.ack,
+            spaced_hex(&written.slot.raw_record)
+        );
+        assert_eq!(written.ack, "A5 05 D8 00 82");
+        assert_eq!(written.slot.raw_record, expected_probe);
+
+        let restored = write_macro(slot, original.clone()).expect("D8 restore and D9 readback");
+        println!(
+            "restored slot={} ack={} raw={}",
+            slot,
+            restored.ack,
+            spaced_hex(&restored.slot.raw_record)
+        );
+        assert_eq!(restored.ack, "A5 05 D8 00 82");
+        assert_eq!(
+            restored.slot.raw_record.len(),
+            protocol::MACRO_HEADER_LENGTH
+        );
+        assert_eq!(restored.slot.raw_record, original);
+    }
 }
 
 impl CurveSettingsInput {

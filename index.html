@@ -26,7 +26,6 @@
               <h2>コントローラー</h2>
               <p id="device-name">接続を確認しています</p>
             </div>
-            <button id="scan" data-operation>再検索</button>
           </div>
           <dl id="device-details" class="details"></dl>
         </section>
@@ -36,20 +35,11 @@
             <div>
               <p class="section-kicker">PROFILE</p>
               <h2>ベースプロファイル</h2>
-              <p>コントローラーから現在の設定を読み込みます。</p>
+              <p>接続中のコントローラー設定を読み込みます。</p>
             </div>
-            <div class="button-row">
-              <button id="read" class="primary" data-operation>読み取る</button>
-              <button id="open-settings" class="accent" disabled>設定を開く（読み込み）</button>
-            </div>
+            <button id="open-settings" class="accent" disabled>設定を開く</button>
           </div>
           <dl id="profile-details" class="details"></dl>
-          <div class="button-row profile-file-actions">
-            <button id="import-profile" type="button" data-operation>公式v37プロファイルを読み込む</button>
-            <button id="export-profile" type="button" disabled>公式形式で書き出す</button>
-            <button id="apply-profile" type="button" class="primary" data-operation disabled>実機へ適用</button>
-            <input id="profile-file" type="file" accept=".bin,.dat" hidden />
-          </div>
           <pre id="profile-head" hidden></pre>
           <p id="profile-hint" class="empty-hint">まだプロファイルを読み込んでいません。</p>
         </section>
@@ -58,10 +48,7 @@
       <div id="settings-view" class="view" hidden>
         <div class="settings-toolbar">
           <button id="back-home" class="back-button">← 概要へ戻る</button>
-          <div class="settings-title">
-            <p class="eyebrow">Controller settings</p>
-            <h2>コントローラー設定</h2>
-          </div>
+          <span id="settings-profile-status" class="status-pill"></span>
           <span id="settings-dirty" class="status-pill" hidden>未保存</span>
           <button id="save-settings" class="primary" data-operation disabled>設定を保存</button>
         </div>
@@ -71,6 +58,7 @@
           <button id="tab-keymap" class="tab" type="button">キーバインド</button>
           <button id="tab-device" class="tab" type="button">デバイス</button>
           <button id="tab-vibration" class="tab" type="button">振動</button>
+          <button id="tab-macro" class="tab" type="button">マクロ（任意）</button>
         </nav>
 
         <section id="settings-stick-section" class="panel settings-section">
@@ -194,7 +182,154 @@
             <summary>詳細: 32個の生バイトを表示</summary>
             <div id="keymap-raw-grid" class="keymap-raw-grid"></div>
           </details>
-          <p class="analysis-note">各スロットはプロファイルの <code>0x164 + 4 × index</code> に対応します。選択画面で変更した既知の形式以外は、生の4バイトを保持します。M2連射は実機で確定した <code>0x140: 00/01</code> を切り替えます。M1/M3/M4は未確定部分を保持します。</p>
+          <p class="analysis-note">各スロットはプロファイルの <code>0x164 + 4 × index</code> に対応します。byte0はtype、type 0x01はcontroller出力3個、type 0x02はmodifier＋keyboard usage 2個です。Nullは <code>01 FF FF FF</code>、全ゼロはidentityです。連射は別タブでM1〜M4の <code>0x140..0x143</code> を編集します。M1保存時に同時変化する <code>0x03B</code>、<code>0x146</code>、<code>0x167</code> は連射ビットではないため、raw profileのまま保持します。</p>
+        </section>
+
+        <section id="settings-macro-section" class="panel settings-section" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">OPTIONAL MACRO / DIAGNOSTICS</p>
+              <h2>マクロ（任意）</h2>
+              <p>通常のボタン割り当てと連射だけなら不要です。M1〜M4で複数操作を再生するときだけ使います。</p>
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <section class="stick-control-group">
+              <div class="group-heading">
+                <h3>Rapid-fire</h3>
+                <p>プロファイルの0x140〜0x143をM1〜M4として保存し、速度インデックスは0x144です。</p>
+              </div>
+              <label class="toggle-row" for="rapid-m1"><span><strong>M1</strong><small>0x140</small></span><input id="rapid-m1" type="checkbox" /><span class="toggle-track" aria-hidden="true"><span></span></span></label>
+              <label class="toggle-row" for="rapid-m2"><span><strong>M2</strong><small>0x141</small></span><input id="rapid-m2" type="checkbox" /><span class="toggle-track" aria-hidden="true"><span></span></span></label>
+              <label class="toggle-row" for="rapid-m3"><span><strong>M3</strong><small>0x142</small></span><input id="rapid-m3" type="checkbox" /><span class="toggle-track" aria-hidden="true"><span></span></span></label>
+              <label class="toggle-row" for="rapid-m4"><span><strong>M4</strong><small>0x143</small></span><input id="rapid-m4" type="checkbox" /><span class="toggle-track" aria-hidden="true"><span></span></span></label>
+              <div class="range-field">
+                <div class="range-label"><label for="rapid-speed">Speed index / 0x144</label><output id="rapid-timing">unknown</output></div>
+                <select id="rapid-speed">
+                  <option value="unknown">unknown</option>
+                  <option value="0">0 — 5 Hz / 200 ms</option>
+                  <option value="1">1 — 10 Hz / 100 ms</option>
+                  <option value="2">2 — 20 Hz / 50 ms</option>
+                </select>
+              </div>
+            </section>
+
+            <section class="stick-control-group">
+              <div class="group-heading">
+                <h3>マクロスロット</h3>
+                <p>4つの保存枠から編集する枠を選びます。空の枠にはステップを追加できます。</p>
+              </div>
+              <div class="macro-toolbar">
+                <button id="refresh-macros" type="button">実機から読み込む</button>
+                <label>編集する枠
+                  <select id="macro-slot" aria-label="マクロスロット">
+                  <option value="0">Slot 0</option>
+                  <option value="1">Slot 1</option>
+                  <option value="2">Slot 2</option>
+                  <option value="3">Slot 3</option>
+                  </select>
+                </label>
+              </div>
+              <div id="macro-slots" class="macro-slot-grid"></div>
+              <p id="macro-slot-details" class="read-only-field">実機からマクロを読み込んでください。</p>
+            </section>
+          </div>
+
+          <section class="stick-control-group macro-editor">
+            <div class="section-heading">
+              <div>
+                <h3 id="macro-editor-title">マクロを読み込んでください</h3>
+                <p>1ステップは「何ms押すか」「どの入力を出すか」「スティック値」です。時間は8ms単位に丸められます。</p>
+              </div>
+              <div class="button-row">
+                <button id="add-macro-step" type="button" disabled>ステップを追加</button>
+                <button id="write-macro" class="primary" type="button" disabled>この枠を保存</button>
+              </div>
+            </div>
+            <div class="macro-friendly-header">
+              <label>呼び出しキー
+                <select id="macro-run-key-select">
+                  <option value="23">M1</option>
+                  <option value="24">M2</option>
+                  <option value="25">M3</option>
+                  <option value="26">M4</option>
+                  <option value="31">未設定</option>
+                </select>
+              </label>
+              <label>記録キー
+                <select id="macro-m-key-select">
+                  <option value="0">M1</option>
+                  <option value="1">M2</option>
+                  <option value="2">M3</option>
+                  <option value="3">M4</option>
+                </select>
+              </label>
+              <label>繰り返し回数
+                <input id="macro-repeat" type="number" min="0" max="65535" value="0" />
+              </label>
+              <label class="macro-check"><input id="macro-run-after-release" type="checkbox" />キーを離しても完走</label>
+              <label class="macro-check"><input id="macro-loop" type="checkbox" />ループ再生</label>
+            </div>
+            <div id="macro-step-list" class="macro-step-list"></div>
+            <details class="macro-advanced">
+              <summary>上級者向け：生データとヘッダー</summary>
+              <div class="macro-header-grid">
+                <label>setting<input id="macro-setting" type="number" min="0" max="255" value="0" /></label>
+                <label>M-key ordinal<input id="macro-m-key" type="number" min="0" max="255" value="0" /></label>
+                <label>run-key byte<input id="macro-run-key" type="number" min="0" max="255" value="31" /></label>
+                <label>flags<input id="macro-flags" type="number" min="0" max="255" value="0" /></label>
+              </div>
+              <button id="apply-macro-header" type="button">ヘッダー値を反映</button>
+              <textarea id="macro-raw" rows="6" spellcheck="false" placeholder="00 0A 00 00 1F 00 00 00"></textarea>
+              <pre id="macro-output" class="diagnostic-output"></pre>
+            </details>
+          </section>
+
+          <section class="stick-control-group">
+            <div class="section-heading">
+              <div>
+                <p class="section-kicker">OPTIONAL DEVICE EXTRAS</p>
+                <h3>補助設定</h3>
+                <p>通常のボタン・スティック設定には不要です。使う場合だけLED設定やデバイス状態を確認します。</p>
+              </div>
+              <button id="refresh-auxiliary" type="button">デバイス状態を確認</button>
+            </div>
+            <p id="auxiliary-summary" class="auxiliary-summary">まだデバイス状態を確認していません。</p>
+            <div class="auxiliary-controls">
+              <section class="auxiliary-card">
+                <div class="group-heading">
+                  <h3>ロゴLEDの色</h3>
+                  <p>3つのRGBゾーンを色で指定します。</p>
+                </div>
+                <div class="logo-color-grid">
+                  <label>ゾーン1<input id="logo-led-color-1" type="color" value="#000000" /></label>
+                  <label>ゾーン2<input id="logo-led-color-2" type="color" value="#000000" /></label>
+                  <label>ゾーン3<input id="logo-led-color-3" type="color" value="#000000" /></label>
+                </div>
+                <button id="write-logo-led" type="button">ロゴLEDを適用</button>
+              </section>
+              <section class="auxiliary-card">
+                <div class="group-heading">
+                  <h3>明るさ</h3>
+                  <p>機器が受け付ける0〜255の明るさ値です。</p>
+                </div>
+                <div class="range-label"><label for="led-brightness">明るさ</label><output id="led-brightness-value">0</output></div>
+                <input id="led-brightness" type="range" min="0" max="255" value="0" />
+                <button id="write-led-brightness" type="button">明るさを適用</button>
+              </section>
+            </div>
+            <details class="auxiliary-advanced">
+              <summary>上級者向け：未解析応答・点灯モード</summary>
+              <pre id="auxiliary-output" class="diagnostic-output"></pre>
+              <div class="aux-write-grid">
+                <label>点灯モード（raw 1 byte）<input id="lighting-mode" type="text" value="00" /></label>
+                <button id="write-lighting-mode" type="button">点灯モードを送信</button>
+              </div>
+            </details>
+          </section>
+
+          <p class="analysis-note">D8の書き込み後はACKを検証し、同じスロットをD9で再読出しします。CRCは実機で確認したCRC-16/MODBUS（反転多項式0xA001、初期値0xFFFF、格納big-endian）です。</p>
         </section>
 
         <section id="settings-device-section" class="panel settings-section" hidden>
@@ -208,6 +343,18 @@
               <span id="device-dirty" class="status-pill" hidden>未保存</span>
               <button id="refresh-device-settings" type="button">再読込</button>
               <button id="save-device-settings" class="primary" data-operation disabled>デバイス設定を保存</button>
+            </div>
+          </div>
+          <div class="profile-tools">
+            <div class="group-heading">
+              <h3>プロファイル入出力</h3>
+              <p>公式v37形式の読み込み・書き出し・実機適用はここから行います。</p>
+            </div>
+            <div class="button-row">
+              <button id="import-profile" type="button" data-operation>公式v37プロファイルを読み込む</button>
+              <button id="export-profile" type="button" disabled>公式形式で書き出す</button>
+              <button id="apply-profile" type="button" class="primary" data-operation disabled>実機へ適用</button>
+              <input id="profile-file" type="file" accept=".bin,.dat" hidden />
             </div>
           </div>
           <div class="device-settings-grid">
@@ -265,7 +412,7 @@
             <button id="save-vibration" class="primary" data-operation disabled>振動を保存</button>
           </div>
           <div class="vibration-mode-field range-field">
-            <div class="range-label"><label for="vibration-mode">振動モード</label><output id="vibration-mode-raw">自動判定</output></div>
+            <div class="range-label"><label for="vibration-mode">振動モード</label></div>
             <select id="vibration-mode">
               <option value="off">オフ</option>
               <option value="strong">強い</option>
@@ -320,6 +467,12 @@
             <div id="keymap-controller-grid" class="key-choice-grid controller-choice-grid"></div>
           </div>
           <div id="keymap-keyboard-panel" role="tabpanel" hidden>
+            <div class="keyboard-vector-controls">
+              <label for="keymap-keyboard-modifier">Modifier</label>
+              <select id="keymap-keyboard-modifier"></select>
+              <label for="keymap-keyboard-second">Second usage</label>
+              <select id="keymap-keyboard-second"></select>
+            </div>
             <div id="keymap-keyboard-grid" class="key-choice-grid keyboard-choice-grid"></div>
           </div>
           <div class="keymap-dialog-footer">
@@ -329,7 +482,7 @@
         </div>
       </dialog>
 
-      <p id="message" role="status">準備しています…</p>
+      <p id="message" role="status" hidden>準備しています…</p>
     </main>
   </body>
 </html>
