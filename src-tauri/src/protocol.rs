@@ -270,6 +270,48 @@ pub fn stored_profile_crc(profile: &[u8]) -> Result<u16, String> {
         .ok_or_else(|| "profile is too short".into())
 }
 
+pub fn new_v37_profile() -> Vec<u8> {
+    let mut profile = vec![0_u8; V37_PROFILE_LENGTH];
+    profile[2..4].copy_from_slice(&(V37_PROFILE_LENGTH as u16).to_be_bytes());
+    write_curve(
+        &mut profile,
+        V37_LEFT_DEFAULT_CURVE_OFFSET,
+        CurveSettings {
+            center: 0,
+            point1_x: 25,
+            point1_y: 25,
+            point2_x: 75,
+            point2_y: 75,
+            edge: 0,
+            stabilization: 0,
+        },
+        "left",
+    )
+    .expect("valid default left curve");
+    write_curve(
+        &mut profile,
+        V37_RIGHT_DEFAULT_CURVE_OFFSET,
+        CurveSettings {
+            center: 0,
+            point1_x: 25,
+            point1_y: 25,
+            point2_x: 75,
+            point2_y: 75,
+            edge: 0,
+            stabilization: 0,
+        },
+        "right",
+    )
+    .expect("valid default right curve");
+    profile[V37_LEFT_VIBRATION_MIN_OFFSET] = 0;
+    profile[V37_RIGHT_VIBRATION_MIN_OFFSET] = 0;
+    profile[V37_LEFT_VIBRATION_MAX_OFFSET] = 1;
+    profile[V37_RIGHT_VIBRATION_MAX_OFFSET] = 1;
+    let crc = profile_crc(&profile).expect("default profile crc");
+    profile[..2].copy_from_slice(&crc.to_be_bytes());
+    profile
+}
+
 pub fn normalize_v37_profile(input: &[u8]) -> Result<Vec<u8>, String> {
     let profile = if input.len() == V37_PROFILE_LENGTH {
         input
@@ -871,6 +913,14 @@ mod tests {
         let crc = profile_crc(&profile).unwrap();
         profile[..2].copy_from_slice(&crc.to_be_bytes());
         profile
+    }
+
+    #[test]
+    fn creates_a_valid_v37_profile_without_hardware() {
+        let profile = new_v37_profile();
+        assert_eq!(normalize_v37_profile(&profile).unwrap(), profile);
+        assert_eq!(controller_settings(&profile).unwrap().left_curve.edge, 0);
+        assert_eq!(vibration_settings(&profile).unwrap().left.max, 1);
     }
 
     fn rapid_keys(states: &[(usize, Option<bool>)]) -> [Option<bool>; V37_KEYMAP_ENTRY_COUNT] {

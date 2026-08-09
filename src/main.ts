@@ -1,6 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-
 type DeviceSummary = {
   vendorProduct: string;
   usage: string;
@@ -390,6 +388,7 @@ function setBusy(value: boolean, message?: string) {
 function syncActions() {
   byId<HTMLButtonElement>("refresh-device").disabled = busy;
   byId<HTMLButtonElement>("import-profile").disabled = busy;
+  byId<HTMLButtonElement>("new-profile").disabled = busy;
   byId<HTMLButtonElement>("read-device-profile").disabled = busy || !deviceSession;
   byId<HTMLButtonElement>("export-profile").disabled = busy || !currentProfile;
   byId<HTMLButtonElement>("apply-profile").disabled = busy || !currentProfile || !currentProfile.saved || !currentProfile.supported || settingsDirty || vibrationDirty;
@@ -453,6 +452,7 @@ function clearProfile() {
   currentDeviceSettings = null;
   byId("settings-profile-status").textContent = "";
   byId("settings-profile-name").textContent = "";
+  byId<HTMLButtonElement>("save-profile").textContent = "プロファイルを保存";
   renderDetails("profile-details", []);
   byId("profile-hint").textContent = "まだプロファイルを読み込んでいません。";
   byId("curve-dirty").hidden = true;
@@ -467,6 +467,7 @@ function renderProfile(profile: ProfileDocument) {
   byId("settings-profile-status").textContent = profile.saved
     ? (crcState === "一致" ? "保存済み" : "CRC不一致")
     : "未保存の編集";
+  byId<HTMLButtonElement>("save-profile").textContent = "プロファイルを保存";
   const rapid = profile.settings.rapidFire;
   const rapidButtons = KEYMAP_VISIBLE_SOURCES
     .filter(({ slot }) => rapid.keys[slot] === true)
@@ -1006,7 +1007,7 @@ function renderMacroSteps(record: number[] | null) {
   if (!record || record.length < 10) {
     const empty = document.createElement("p");
     empty.className = "empty-hint";
-    empty.textContent = "先に実機からマクロを読み込んでください。";
+    empty.textContent = "先にコントローラーからマクロを読み込んでください。";
     container.append(empty);
     return;
   }
@@ -1189,12 +1190,12 @@ async function writeMacro() {
   try {
     const slot = Number(byId<HTMLSelectElement>("macro-slot").value);
     if (!macroDraftRecord) {
-      throw new Error("先に実機からマクロを読み込んでください");
+      throw new Error("先にコントローラーからマクロを読み込んでください");
     }
     const record = macroDraftRecord.slice();
     syncFriendlyMacroHeader(record);
     macroDraftRecord = record;
-    setBusy(true, `マクロ スロット${slot + 1}を保存し、実機で読み返しています…`);
+    setBusy(true, `マクロ スロット${slot + 1}を保存後、コントローラーから読み返しています…`);
     const result = await invoke<MacroWriteResult>("write_macro", {
       devicePath: path,
       slot,
@@ -1678,7 +1679,7 @@ function renderProfileLibrary() {
   if (profileList.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-hint";
-    empty.textContent = "共有プロファイルはまだありません。ファイルまたは実機から追加してください。";
+    empty.textContent = "共有プロファイルはまだありません。Shareコードから追加するか、コントローラーから読み込んでください。";
     container.append(empty);
     return;
   }
@@ -1690,17 +1691,21 @@ function renderProfileLibrary() {
     return right.id - left.id;
   });
   for (const entry of sorted) {
+    const matchesDevice = profileMatchesDevice(entry);
     const card = document.createElement("article");
     card.className = "profile-card";
-    card.classList.toggle("profile-card-matched", profileMatchesDevice(entry));
+    card.classList.toggle("profile-card-matched", matchesDevice);
     const heading = document.createElement("div");
     heading.className = "profile-card-heading";
     const title = document.createElement("h3");
     title.textContent = entry.name || `Profile ${entry.id}`;
-    const state = document.createElement("span");
-    state.className = `status-pill ${entry.supported ? "profile-compatible" : "profile-incompatible"}`;
-    state.textContent = entry.supported ? (profileMatchesDevice(entry) ? "接続中UUID" : "互換") : "非対応";
-    heading.append(title, state);
+    heading.append(title);
+    if (!matchesDevice) {
+      const state = document.createElement("span");
+      state.className = `status-pill ${entry.supported ? "profile-compatible" : "profile-incompatible"}`;
+      state.textContent = entry.supported ? "互換" : "非対応";
+      heading.append(state);
+    }
     const details = document.createElement("p");
     details.className = "profile-card-details";
     details.textContent = [
@@ -1878,18 +1883,18 @@ async function scan() {
 async function readProfileFromDevice() {
   const session = deviceSession;
   if (!session) return;
-  setBusy(true, "実機プロファイルを読み取っています…");
+  setBusy(true, "コントローラーのプロファイルを読み取っています…");
   try {
     const profile = await invoke<ProfileDocument>("read_profile", { devicePath: session.device.path });
     setCurrentProfile({
       ...profile,
-      name: "実機から読み込んだプロファイル",
+      name: "コントローラーから読み込んだプロファイル",
       deviceUuid: session.uuid,
       deviceName: session.device.product,
       zkmVersion: session.zkmVersion ? String(session.zkmVersion) : "",
     });
     showView("settings");
-    setMessage("実機から読み込みました。保存するまでConfig.dbも実機も変更していません。");
+    setMessage("コントローラーから読み込みました。保存するまでConfig.dbもコントローラーも変更していません。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1897,35 +1902,60 @@ async function readProfileFromDevice() {
   }
 }
 
-async function importProfileFile(file: File) {
-  setBusy(true, "プロファイルを確認しています…");
+async function importShareProfile() {
+  const shareCode = window.prompt("公式Shareコードを入力してください", "")?.trim();
+  if (!shareCode) return;
+  setBusy(true, "公式Shareコードを確認しています…");
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    setCurrentProfile(await invoke<ProfileDocument>("load_profile", { profile: Array.from(bytes) }));
+    setCurrentProfile(await invoke<ProfileDocument>("import_share_profile", {
+      shareCode,
+      deviceUuid: deviceSession?.uuid ?? "",
+    }));
     showView("settings");
-    setMessage("プロファイルを読み込みました。保存するまで共有DBは変更していません。");
+    setMessage("公式Shareコードからプロファイルを読み込みました。保存するまで共有DBは変更していません。");
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
-    byId<HTMLInputElement>("profile-file").value = "";
     setBusy(false);
   }
 }
 
-async function exportProfile() {
-  if (!currentProfile) return;
-  const framed = new Uint8Array(4 + currentProfile.rawProfile.length);
-  framed.set([0xa4, 0xd7, 0xe4, 0x01]);
-  framed.set(currentProfile.rawProfile, 4);
-  setBusy(true, "保存先を選択してください…");
+async function createNewProfile() {
+  setBusy(true, "新しいプロファイルを作成しています…");
   try {
-    const path = await save({
-      defaultPath: `${currentProfile.name || "bigbigwon-profile"}.bin`,
-      filters: [{ name: "BIGBIGWONプロファイル", extensions: ["bin"] }],
+    setCurrentProfile(await invoke<ProfileDocument>("new_profile"));
+    showView("settings");
+    setMessage("新しいプロファイルを作成しました。設定後に保存してください。");
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function exportShareCode() {
+  if (!currentProfile) return;
+  const session = deviceSession;
+  setBusy(true, "公式Shareコードを発行しています…");
+  try {
+    const shareCode = await invoke<string>("create_share_code", {
+      name: currentProfile.name || "BIGBIGWON Profile",
+      profile: currentProfile.rawProfile,
+      deviceUuid: currentProfile.deviceUuid || session?.uuid || "",
+      deviceName: currentProfile.deviceName || session?.device.product || "",
+      firmwareVersion: currentProfile.firmwareVersion,
+      zkmVersion: currentProfile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
     });
-    if (!path) return;
-    await invoke("export_profile", { path, data: Array.from(framed) });
-    setMessage(`プロファイルを書き出しました。\n${path}`);
+    let copied = false;
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(shareCode);
+        copied = true;
+      } catch {
+        copied = false;
+      }
+    }
+    setMessage(`公式Shareコードを発行しました${copied ? "。クリップボードにコピー済み" : ""}。\n${shareCode}`);
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -1947,7 +1977,7 @@ async function applyProfile() {
       profile: profile.rawProfile,
       devicePath: session.device.path,
     });
-    setMessage(`プロファイルを実機へ適用しました。D7 ACK: ${result.ack}。自動D6再読込は行っていません。`);
+    setMessage(`プロファイルをコントローラーへ適用しました。D7 ACK: ${result.ack}。自動D6再読込は行っていません。`);
   } catch (error) {
     setMessage(errorMessage(error));
   } finally {
@@ -2022,7 +2052,7 @@ async function saveProfileDocument() {
     const saved = await invoke<ProfileDocument>("save_profile", { input });
     setCurrentProfile(saved);
     await refreshProfiles();
-    setMessage("プロファイルをConfig.dbへ保存しました。実機へは送信していません。");
+    setMessage("プロファイルをConfig.dbへ保存しました。コントローラーへは送信していません。");
   } catch (error) {
     const message = errorMessage(error);
     if (message.startsWith("PROFILE_CONFLICT:") && profile.id !== null) {
@@ -2086,13 +2116,10 @@ async function saveDeviceSettings() {
 
 window.addEventListener("DOMContentLoaded", () => {
   byId("refresh-device").addEventListener("click", () => void scan());
+  byId("new-profile").addEventListener("click", () => void createNewProfile());
   byId("read-device-profile").addEventListener("click", () => void readProfileFromDevice());
-  byId("import-profile").addEventListener("click", () => byId<HTMLInputElement>("profile-file").click());
-  byId<HTMLInputElement>("profile-file").addEventListener("change", (event) => {
-    const file = (event.target as HTMLInputElement).files?.[0];
-    if (file) void importProfileFile(file);
-  });
-  byId("export-profile").addEventListener("click", () => void exportProfile());
+  byId("import-profile").addEventListener("click", () => void importShareProfile());
+  byId("export-profile").addEventListener("click", () => void exportShareCode());
   byId("apply-profile").addEventListener("click", () => void applyProfile());
   byId("back-home").addEventListener("click", () => {
     showView("home");

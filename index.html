@@ -38,11 +38,11 @@
               <p>公式アプリと同じ Config.db を使用します。</p>
             </div>
             <div class="button-row">
-              <button id="import-profile" type="button">ファイルから追加</button>
-              <button id="read-device-profile" class="accent" type="button" disabled>実機から新規作成</button>
-              <button id="export-profile" type="button" disabled>書き出す</button>
-              <button id="apply-profile" class="primary" type="button" disabled>実機へ適用</button>
-              <input id="profile-file" type="file" accept=".bin,.dat" hidden />
+              <button id="import-profile" type="button">Shareコードから追加</button>
+              <button id="new-profile" class="accent" type="button">新規作成</button>
+              <button id="read-device-profile" class="accent" type="button" disabled>コントローラーのプロファイルを読み込む</button>
+              <button id="export-profile" type="button" disabled>Shareコードを発行</button>
+              <button id="apply-profile" class="primary" type="button" disabled>コントローラーへ適用</button>
             </div>
           </div>
           <div id="profile-library" class="profile-library"></div>
@@ -217,7 +217,7 @@
                 <p>4つの保存枠から編集する枠を選びます。空の枠にはステップを追加できます。</p>
               </div>
               <div class="macro-toolbar">
-                <button id="refresh-macros" type="button">実機から読み込む</button>
+                <button id="refresh-macros" type="button">コントローラーから読み込む</button>
                 <label>編集する枠
                   <select id="macro-slot" aria-label="マクロスロット">
                   <option value="0">Slot 0</option>
@@ -228,7 +228,7 @@
                 </label>
               </div>
               <div id="macro-slots" class="macro-slot-grid"></div>
-              <p id="macro-slot-details" class="read-only-field">実機からマクロを読み込んでください。</p>
+              <p id="macro-slot-details" class="read-only-field">コントローラーからマクロを読み込んでください。</p>
             </section>
           </div>
 

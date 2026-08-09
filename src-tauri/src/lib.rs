@@ -1,6 +1,7 @@
 mod device;
 mod profiles;
 mod protocol;
+mod share;
 
 use std::sync::{Arc, Mutex};
 
@@ -59,6 +60,7 @@ fn transient_profile_view(
     name: &str,
     device_uuid: String,
     device_name: String,
+    firmware_version: String,
     zkm_version: String,
 ) -> ProfileDocumentView {
     ProfileDocumentView {
@@ -66,7 +68,7 @@ fn transient_profile_view(
         name: name.to_string(),
         device_uuid,
         device_name,
-        firmware_version: String::new(),
+        firmware_version,
         zkm_version,
         created_at: String::new(),
         saved: false,
@@ -170,6 +172,7 @@ async fn read_profile(
             String::new(),
             String::new(),
             String::new(),
+            String::new(),
         ))
     })
     .await
@@ -177,11 +180,66 @@ async fn read_profile(
 }
 
 #[tauri::command]
-async fn load_profile(profile: Vec<u8>) -> Result<ProfileDocumentView, String> {
-    let summary = device::load_profile_summary(profile)?;
+async fn import_share_profile(
+    share_code: String,
+    device_uuid: String,
+) -> Result<ProfileDocumentView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let imported = share::import_share_code(share_code, device_uuid)?;
+        let raw_profile: Vec<u8> = serde_json::from_str(&imported.config_json)
+            .map_err(|error| format!("Shareコードのプロファイルデータが不正です: {error}"))?;
+        let summary = device::load_profile_summary(raw_profile)?;
+        let name = if imported.name.trim().is_empty() {
+            "Shareから読み込んだプロファイル"
+        } else {
+            &imported.name
+        };
+        Ok(transient_profile_view(
+            summary,
+            name,
+            imported.device_uuid,
+            imported.device_name,
+            imported.firmware_version,
+            imported.zkm_version,
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn create_share_code(
+    name: String,
+    profile: Vec<u8>,
+    device_uuid: String,
+    device_name: String,
+    firmware_version: String,
+    zkm_version: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let raw_profile = protocol::normalize_v37_profile(&profile)?;
+        let config_json = serde_json::to_string(&raw_profile)
+            .map_err(|error| format!("プロファイルをShare形式へ変換できませんでした: {error}"))?;
+        share::create_share_code(share::ShareProfile {
+            name,
+            device_uuid,
+            device_name,
+            firmware_version,
+            zkm_version,
+            config_json,
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn new_profile() -> Result<ProfileDocumentView, String> {
+    let summary = device::load_profile_summary(protocol::new_v37_profile())?;
     Ok(transient_profile_view(
         summary,
-        "インポートしたプロファイル",
+        "新しいプロファイル",
+        String::new(),
         String::new(),
         String::new(),
         String::new(),
@@ -288,20 +346,9 @@ async fn write_macro(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-async fn export_profile(path: String, data: Vec<u8>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        std::fs::write(&path, &data)
-            .map_err(|error| format!("ファイルを書き出せませんでした: {error}"))
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             scan_device,
@@ -310,15 +357,16 @@ pub fn run() {
             save_profile,
             delete_profile,
             read_profile,
-            load_profile,
+            import_share_profile,
+            create_share_code,
+            new_profile,
             update_vibration,
             update_controller_settings,
             apply_profile,
             read_device_settings,
             set_device_settings,
             read_macros,
-            write_macro,
-            export_profile
+            write_macro
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

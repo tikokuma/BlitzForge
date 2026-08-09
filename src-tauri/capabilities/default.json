@@ -8,7 +8,6 @@
     "core:webview:deny-get-all-webviews",
     "core:webview:deny-webview-position",
     "core:webview:deny-webview-size",
-    "core:webview:deny-internal-toggle-devtools",
-    "dialog:default"
+    "core:webview:deny-internal-toggle-devtools"
   ]
 }

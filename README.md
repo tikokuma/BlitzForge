@@ -7,7 +7,7 @@ Production replacement for the BIGBIG WON settings application.
 - Rust HID transport using `hidapi`'s Windows native backend
 - Exact config-interface matching (`413D:2104`, Usage `FF7A:0001`)
 - Shared official profile library backed by `%PROGRAMDATA%\GamepadAssistant\Config.db`
-- v37 profile read, CRC verification, JSON import/export, and unknown-byte preservation
+- v37 profile read, CRC verification, official Share-code import/export, and unknown-byte preservation
 - Profile edits are saved to `Config.db`; applying a saved profile to hardware is a separate, explicit `D7` operation
 - Device discovery uses the short `EF` UUID and `0B` ZKM probes; startup does not issue a large `D6` read
 - Vibration, stick, keymap, and rapid-fire changes are combined into one profile save
@@ -18,7 +18,9 @@ Production replacement for the BIGBIG WON settings application.
 
 LED control is intentionally not implemented. This is a deliberate scope decision, not an omitted feature.
 
-The initial shared format is v37 with a 484-byte profile. Other official profile
+The initial shared format is v37 with a 484-byte profile. Share-code exchange
+uses the same `shareConfig` and `importShareConfig` endpoints as the official
+application; no profile files are imported or exported. Other official profile
 formats remain visible in the library when possible, but editing and hardware
 application are disabled with an incompatibility reason. Macros and lighting
 remain hardware/database features outside the shared profile store.
@@ -50,3 +52,6 @@ npm run build
 cd src-tauri
 cargo test
 ```
+
+解析
+E:\dev\dev\BIGBIGWON
