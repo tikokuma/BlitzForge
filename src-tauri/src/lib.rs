@@ -16,6 +16,26 @@ struct AppState {
     profile_store: Arc<Mutex<profiles::ProfileStoreState>>,
 }
 
+async fn run_locked<State, Output, Operation>(
+    state: Arc<Mutex<State>>,
+    lock_name: &'static str,
+    operation: Operation,
+) -> Result<Output, String>
+where
+    State: Send + 'static,
+    Output: Send + 'static,
+    Operation: FnOnce(&mut State) -> Result<Output, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut state = state
+            .lock()
+            .map_err(|_| format!("{lock_name} lock was poisoned"))?;
+        operation(&mut state)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileDocumentView {
@@ -81,30 +101,20 @@ fn transient_profile_view(
 
 #[tauri::command]
 async fn scan_device(state: tauri::State<'_, AppState>) -> Result<Option<DeviceSession>, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
+    run_locked(state.hid_transaction.clone(), "HID transaction", |_| {
         device::scan_device()
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
 async fn list_profiles(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<profiles::ProfileListEntry>, String> {
-    let profile_store = state.profile_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _store = profile_store
-            .lock()
-            .map_err(|_| "profile store lock was poisoned".to_string())?;
+    run_locked(state.profile_store.clone(), "profile store", |_| {
         profiles::list_profiles()
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -112,15 +122,10 @@ async fn load_saved_profile(
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<ProfileDocumentView, String> {
-    let profile_store = state.profile_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _store = profile_store
-            .lock()
-            .map_err(|_| "profile store lock was poisoned".to_string())?;
+    run_locked(state.profile_store.clone(), "profile store", move |_| {
         saved_profile_view(profiles::load_saved_profile(id)?, None)
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -128,15 +133,10 @@ async fn save_profile(
     state: tauri::State<'_, AppState>,
     input: profiles::SaveProfileInput,
 ) -> Result<ProfileDocumentView, String> {
-    let profile_store = state.profile_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut store = profile_store
-            .lock()
-            .map_err(|_| "profile store lock was poisoned".to_string())?;
-        saved_profile_view(profiles::save_profile(&mut store, input)?, None)
+    run_locked(state.profile_store.clone(), "profile store", move |store| {
+        saved_profile_view(profiles::save_profile(store, input)?, None)
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -144,15 +144,10 @@ async fn delete_profile(
     state: tauri::State<'_, AppState>,
     input: profiles::DeleteProfileInput,
 ) -> Result<(), String> {
-    let profile_store = state.profile_store.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut store = profile_store
-            .lock()
-            .map_err(|_| "profile store lock was poisoned".to_string())?;
-        profiles::delete_profile(&mut store, input)
+    run_locked(state.profile_store.clone(), "profile store", move |store| {
+        profiles::delete_profile(store, input)
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -160,23 +155,22 @@ async fn read_profile(
     state: tauri::State<'_, AppState>,
     device_path: String,
 ) -> Result<ProfileDocumentView, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        let summary = device::read_profile_summary(&device_path)?;
-        Ok(transient_profile_view(
-            summary,
-            "実機から読み込んだプロファイル",
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-        ))
-    })
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| {
+            let summary = device::read_profile_summary(&device_path)?;
+            Ok(transient_profile_view(
+                summary,
+                "実機から読み込んだプロファイル",
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ))
+        },
+    )
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -268,15 +262,12 @@ async fn apply_profile(
     profile: Vec<u8>,
     device_path: String,
 ) -> Result<device::ApplyProfileResult, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        device::apply_profile(profile, &device_path)
-    })
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| device::apply_profile(profile, &device_path),
+    )
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -284,15 +275,12 @@ async fn read_device_settings(
     state: tauri::State<'_, AppState>,
     device_path: String,
 ) -> Result<DeviceSettingsSummary, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        device::read_device_settings(&device_path)
-    })
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| device::read_device_settings(&device_path),
+    )
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -301,15 +289,12 @@ async fn set_device_settings(
     device_path: String,
     settings: DeviceSettingsInput,
 ) -> Result<device::DeviceSettingsWriteResult, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        device::set_device_settings(&device_path, settings)
-    })
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| device::set_device_settings(&device_path, settings),
+    )
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -317,15 +302,12 @@ async fn read_macros(
     state: tauri::State<'_, AppState>,
     device_path: String,
 ) -> Result<MacroSummary, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        device::read_macros(&device_path)
-    })
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| device::read_macros(&device_path),
+    )
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -335,15 +317,12 @@ async fn write_macro(
     slot: u8,
     raw_record: Vec<u8>,
 ) -> Result<MacroWriteResult, String> {
-    let hid_transaction = state.hid_transaction.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let _transaction = hid_transaction
-            .lock()
-            .map_err(|_| "HID transaction lock was poisoned".to_string())?;
-        device::write_macro(&device_path, slot, raw_record)
-    })
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| device::write_macro(&device_path, slot, raw_record),
+    )
     .await
-    .map_err(|error| error.to_string())?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -9,14 +9,24 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <main class="app-shell">
-      <header class="app-header">
-        <div>
-          <h1>BIGBIGWON Lite</h1>
+    <header class="window-titlebar">
+      <div id="window-titlebar-drag-region" class="window-titlebar-drag-region" data-tauri-drag-region>
+        <div class="window-titlebar-brand" data-tauri-drag-region>
+          <div class="window-titlebar-mark" aria-hidden="true"></div>
+          <div class="window-titlebar-copy">
+            <strong>BIGBIGWON <span>Lite</span></strong>
+            <small>CONTROL CENTER</small>
+          </div>
         </div>
         <span id="connection" class="badge">確認中</span>
-      </header>
-
+      </div>
+      <div class="window-controls" aria-label="ウィンドウ操作">
+        <button id="window-minimize" class="window-control" type="button" aria-label="最小化"><span aria-hidden="true">−</span></button>
+        <button id="window-maximize" class="window-control" type="button" aria-label="最大化"><span id="window-maximize-icon" aria-hidden="true">□</span></button>
+        <button id="window-close" class="window-control window-control-close" type="button" aria-label="閉じる"><span aria-hidden="true">×</span></button>
+      </div>
+    </header>
+    <main class="app-shell">
       <div id="home-view" class="view">
         <section class="panel device-panel">
           <div class="panel-heading">
@@ -90,10 +100,12 @@
                 <div class="range-field compensation-field">
                   <div class="range-label"><label for="curve-center">センター</label><input id="curve-center-value" class="value-input" type="number" min="-100" max="100" step="1" value="0" inputmode="numeric" aria-label="センターの値" /></div>
                   <div class="range-track"><input id="curve-center" type="range" min="-100" max="100" value="0" /><span class="range-midpoint" aria-hidden="true"></span></div>
+                  <div class="range-direction-hint" aria-hidden="true"><span>← 補填</span><span>デッドゾーン →</span></div>
                 </div>
                 <div class="range-field compensation-field">
                   <div class="range-label"><label for="curve-edge">エッジ</label><input id="curve-edge-value" class="value-input" type="number" min="-100" max="100" step="1" value="0" inputmode="numeric" aria-label="エッジの値" /></div>
                   <div class="range-track"><input id="curve-edge" type="range" min="-100" max="100" value="0" /><span class="range-midpoint" aria-hidden="true"></span></div>
+                  <div class="range-direction-hint" aria-hidden="true"><span>← 補填</span><span>デッドゾーン →</span></div>
                 </div>
               </section>
 

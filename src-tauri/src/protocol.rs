@@ -517,6 +517,15 @@ fn write_curve(
     if !(-100..=100).contains(&curve.edge) {
         return Err(format!("{label} edge must be between -100 and 100"));
     }
+    let center_compensation = if curve.center < 0 { -curve.center } else { 0 };
+    let edge_compensation = if curve.edge < 0 { -curve.edge } else { 0 };
+    if center_compensation + edge_compensation > 100 {
+        return Err(format!(
+            "{label} center and edge compensation must total at most 100"
+        ));
+    }
+    let curve_y_min = center_compensation as u8;
+    let curve_y_max = (100 - edge_compensation) as u8;
     for (field, value) in [
         ("point1_x", curve.point1_x),
         ("point1_y", curve.point1_y),
@@ -525,6 +534,11 @@ fn write_curve(
     ] {
         if value > 100 {
             return Err(format!("{label} {field} must be between 0 and 100"));
+        }
+        if field.ends_with("_y") && !(curve_y_min..=curve_y_max).contains(&value) {
+            return Err(format!(
+                "{label} {field} must be between {curve_y_min} and {curve_y_max} when compensation is applied"
+            ));
         }
     }
 
@@ -1060,6 +1074,45 @@ mod tests {
         };
         let error = set_vibration_settings(&mut profile, narrow).unwrap_err();
         assert!(error.contains("width must be at least 20"));
+    }
+
+    #[test]
+    fn rejects_invalid_curve_compensation_bounds() {
+        let mut profile = profile();
+        let curve = CurveSettings {
+            center: -60,
+            point1_x: 20,
+            point1_y: 60,
+            point2_x: 80,
+            point2_y: 60,
+            edge: -41,
+            stabilization: 0,
+        };
+        let error = write_curve(&mut profile, V37_LEFT_DEFAULT_CURVE_OFFSET, curve, "left")
+            .expect_err("compensation total above 100 must be rejected");
+        assert!(error.contains("must total at most 100"));
+
+        let curve = CurveSettings {
+            center: -20,
+            point1_x: 20,
+            point1_y: 19,
+            point2_x: 80,
+            point2_y: 80,
+            edge: -20,
+            stabilization: 0,
+        };
+        let error = write_curve(&mut profile, V37_LEFT_DEFAULT_CURVE_OFFSET, curve, "left")
+            .expect_err("curve Y below center compensation must be rejected");
+        assert!(error.contains("point1_y must be between 20 and 80"));
+
+        let curve = CurveSettings {
+            point1_y: 20,
+            point2_y: 81,
+            ..curve
+        };
+        let error = write_curve(&mut profile, V37_LEFT_DEFAULT_CURVE_OFFSET, curve, "left")
+            .expect_err("curve Y above edge compensation must be rejected");
+        assert!(error.contains("point2_y must be between 20 and 80"));
     }
 
     #[test]

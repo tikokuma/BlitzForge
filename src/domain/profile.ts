@@ -1,0 +1,26 @@
+export function parseProfileBytes(json: string): number[] | null {
+  try {
+    const value: unknown = JSON.parse(json);
+    if (!Array.isArray(value)
+      || !value.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 0xff)) {
+      return null;
+    }
+    return value as number[];
+  } catch {
+    return null;
+  }
+}
+
+export function profileBytesEqual(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function normalizedDeviceUuid(value: string): string | null {
+  const compact = value.replace(/[\s:_-]/g, "");
+  return /^[0-9a-f]{16}$/i.test(compact) ? compact.toUpperCase() : null;
+}
+
+export function deviceUuidsEqual(left: string, right: string): boolean {
+  const normalizedLeft = normalizedDeviceUuid(left);
+  return normalizedLeft !== null && normalizedLeft === normalizedDeviceUuid(right);
+}

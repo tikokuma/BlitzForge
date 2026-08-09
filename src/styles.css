@@ -56,7 +56,6 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   padding: 34px 0 26px;
 }
 
-.app-header,
 .panel-heading,
 .settings-toolbar,
 .section-heading,
@@ -67,8 +66,111 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   gap: 24px;
 }
 
-.app-header { margin-bottom: 26px; }
-.app-header h1 { margin: 0; font-size: 28px; letter-spacing: -.02em; }
+.window-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  border-bottom: 1px solid #27384f;
+  color: #e8edf5;
+  background:
+    linear-gradient(105deg, #141d2b, #111821 56%, #172944),
+    #141a22;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .2), inset 0 -1px 0 rgba(112, 167, 255, .08);
+  user-select: none;
+}
+.window-titlebar-drag-region {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  min-width: 0;
+  flex: 1;
+  gap: 18px;
+  padding-left: 16px;
+}
+.window-titlebar-brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+.window-titlebar-mark {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 1px solid rgba(144, 190, 255, .58);
+  border-radius: 7px;
+  background: linear-gradient(145deg, #397ce8, #1d4d9e);
+  box-shadow: 0 3px 10px rgba(25, 84, 177, .28), inset 0 1px 0 rgba(255, 255, 255, .24);
+  transform: rotate(-8deg);
+}
+.window-titlebar-mark::before,
+.window-titlebar-mark::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 999px;
+  background: #e8f2ff;
+  box-shadow: 0 0 7px rgba(232, 242, 255, .42);
+  content: "";
+  transform: translate(-50%, -50%) rotate(8deg);
+}
+.window-titlebar-mark::before { width: 12px; height: 3px; }
+.window-titlebar-mark::after { width: 3px; height: 12px; }
+.window-titlebar-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.window-titlebar-copy strong {
+  overflow: hidden;
+  color: #f1f5fb;
+  font-size: 13px;
+  letter-spacing: .045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.window-titlebar-copy strong span { color: #78adff; font-weight: 500; }
+.window-titlebar-copy small {
+  color: #6f7f94;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .15em;
+  white-space: nowrap;
+}
+.window-titlebar .badge {
+  border: 1px solid rgba(130, 155, 190, .18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .14);
+}
+.window-titlebar .badge::before {
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #8b98ab;
+  content: "";
+}
+.window-titlebar .badge.online::before { background: #64d6a2; box-shadow: 0 0 8px rgba(100, 214, 162, .72); }
+.window-titlebar .badge.offline::before { background: #ff8d8d; box-shadow: 0 0 8px rgba(255, 141, 141, .52); }
+.window-controls { display: flex; align-self: stretch; }
+.window-control {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #9eacc0;
+  background: transparent;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1;
+}
+.window-control:hover { color: #eef5ff; background: rgba(112, 167, 255, .14); }
+.window-control-close:hover { color: #fff; background: #c44152; }
 h2, h3, p { margin: 0; }
 h2 { font-size: 18px; letter-spacing: -.01em; }
 h3 { font-size: 14px; }
@@ -306,6 +408,17 @@ pre {
   opacity: .55;
   pointer-events: none;
 }
+.range-direction-hint {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  color: #718096;
+  font-size: 10px;
+  line-height: 1.2;
+  opacity: .82;
+}
+.range-direction-hint span:first-child { color: #f08a55; }
+.range-direction-hint span:last-child { color: #70a7ff; }
 .range-field input[type="range"]:disabled { cursor: not-allowed; opacity: .55; }
 .read-only-field { margin-top: 4px; padding-top: 15px; border-top: 1px solid #27303c; }
 .read-only-field output { color: #9aa7b8; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
@@ -534,8 +647,7 @@ pre {
 @media (max-width: 680px) {
   body { min-width: 0; }
   .app-shell { width: calc(100% - 24px); padding-top: 22px; }
-  .app-header, .panel-heading, .settings-toolbar { align-items: flex-start; }
-  .app-header { gap: 12px; }
+  .panel-heading, .settings-toolbar { align-items: flex-start; }
   .panel-heading, .settings-toolbar { flex-direction: column; }
   .button-row { justify-content: flex-start; }
   .settings-toolbar .primary { align-self: stretch; }
