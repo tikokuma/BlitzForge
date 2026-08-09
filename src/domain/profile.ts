@@ -15,12 +15,12 @@ export function profileBytesEqual(left: readonly number[], right: readonly numbe
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function normalizedDeviceUuid(value: string): string | null {
+export function normalizeDeviceUuid(value: string): string | null {
   const compact = value.replace(/[\s:_-]/g, "");
   return /^[0-9a-f]{16}$/i.test(compact) ? compact.toUpperCase() : null;
 }
 
 export function deviceUuidsEqual(left: string, right: string): boolean {
-  const normalizedLeft = normalizedDeviceUuid(left);
-  return normalizedLeft !== null && normalizedLeft === normalizedDeviceUuid(right);
+  const normalizedLeft = normalizeDeviceUuid(left);
+  return normalizedLeft !== null && normalizedLeft === normalizeDeviceUuid(right);
 }

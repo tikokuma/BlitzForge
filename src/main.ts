@@ -1,6 +1,10 @@
 import { backend } from "./backend";
 import { byId, errorMessage } from "./dom";
 import {
+  loadRememberedActiveProfile,
+  rememberActiveProfile,
+} from "./domain/active-profile";
+import {
   clampPercentage,
   constrainCurve,
   curvesEqual,
@@ -14,7 +18,7 @@ import { deviceUuidsEqual, parseProfileBytes, profileBytesEqual } from "./domain
 import { createKeymapEditor } from "./features/keymap-editor";
 import { createMacroEditor } from "./features/macro-editor";
 import type {
-  ActiveProfileReadState,
+  ActiveProfileState,
   ControllerSettings,
   ControllerSettingsInput,
   CurveSettings,
@@ -79,7 +83,7 @@ let deviceSession: DeviceSession | null = null;
 let profileList: ProfileListEntry[] = [];
 const savedProfileBytesCache = new Map<string, number[] | null>();
 let editingProfile: ProfileDocument | null = null;
-let activeProfileReadState: ActiveProfileReadState = "pending";
+let activeProfileState: ActiveProfileState = "unknown";
 let activeDeviceProfile: number[] | null = null;
 let settingsDirty = false;
 let vibrationDirty = false;
@@ -709,7 +713,9 @@ function savedProfileBytes(entry: ProfileListEntry): number[] | null {
 }
 
 function profileIsActive(entry: ProfileListEntry): boolean {
-  if (activeProfileReadState !== "known" || activeDeviceProfile === null || !profileMatchesDevice(entry)) {
+  if ((activeProfileState !== "known" && activeProfileState !== "remembered")
+    || activeDeviceProfile === null
+    || !profileMatchesDevice(entry)) {
     return false;
   }
   const saved = savedProfileBytes(entry);
@@ -722,18 +728,15 @@ function renderActiveProfileStatus() {
     status.textContent = "現在使用中: 未接続";
     return;
   }
-  if (activeProfileReadState === "pending") {
-    status.textContent = "現在使用中: 確認中";
-    return;
-  }
-  if (activeProfileReadState === "unknown" || activeDeviceProfile === null) {
-    status.textContent = "現在使用中: 未確認（読み込みで確認）";
+  if (activeProfileState === "unknown" || activeDeviceProfile === null) {
+    status.textContent = "現在使用中: 記録なし（適用すると次回から表示）";
     return;
   }
   const activeProfiles = profileList.filter(profileIsActive);
+  const qualifier = activeProfileState === "remembered" ? "（前回適用）" : "";
   status.textContent = activeProfiles.length > 0
-    ? `現在使用中: ${activeProfiles.map((profile) => profile.name || `Profile ${profile.id}`).join(" / ")}`
-    : "現在使用中: ライブラリに未登録";
+    ? `現在使用中: ${activeProfiles.map((profile) => profile.name || `Profile ${profile.id}`).join(" / ")}${qualifier}`
+    : `現在使用中: ライブラリに未登録${qualifier}`;
 }
 
 function renderProfileLibrary() {
@@ -771,7 +774,7 @@ function renderProfileLibrary() {
     if (active) {
       const state = document.createElement("span");
       state.className = "status-pill profile-active";
-      state.textContent = "使用中";
+      state.textContent = activeProfileState === "remembered" ? "前回適用" : "使用中";
       states.append(state);
     }
     if (!matchesDevice) {
@@ -933,20 +936,24 @@ async function deleteProfile(entry: ProfileListEntry) {
   }
 }
 
-async function refreshActiveDeviceProfile(session: DeviceSession) {
-  activeProfileReadState = "pending";
-  activeDeviceProfile = null;
-  renderProfileLibrary();
+function restoreRememberedActiveProfile(session: DeviceSession) {
   try {
-    const profile = await backend.readProfile(session.device.path);
-    if (deviceSession?.device.path !== session.device.path) return;
-    activeDeviceProfile = [...profile.rawProfile];
-    activeProfileReadState = "known";
-  } catch {
-    if (deviceSession?.device.path !== session.device.path) return;
-    activeProfileReadState = "unknown";
+    activeDeviceProfile = loadRememberedActiveProfile(window.localStorage, session.uuid);
+  } catch (error) {
+    console.warn("Could not restore the remembered active profile", error);
+    activeDeviceProfile = null;
   }
-  renderProfileLibrary();
+  activeProfileState = activeDeviceProfile === null ? "unknown" : "remembered";
+}
+
+function setKnownActiveProfile(rawProfile: readonly number[], session: DeviceSession) {
+  activeDeviceProfile = [...rawProfile];
+  activeProfileState = "known";
+  try {
+    rememberActiveProfile(window.localStorage, session.uuid, rawProfile);
+  } catch (error) {
+    console.warn("Could not remember the active profile", error);
+  }
 }
 
 async function scan() {
@@ -957,9 +964,10 @@ async function scan() {
     setConnection(await backend.scanDevice());
     clearProfile();
     activeDeviceProfile = null;
-    activeProfileReadState = deviceSession ? "pending" : "known";
+    activeProfileState = deviceSession ? "unknown" : "known";
     profilesPromise = refreshProfiles();
     if (deviceSession) {
+      restoreRememberedActiveProfile(deviceSession);
       try {
         applyDeviceSettings(await fetchDeviceSettings(deviceSession.device.path));
       } catch (error) {
@@ -968,13 +976,12 @@ async function scan() {
         deviceSettingsDirty = false;
         byId("device-dirty").hidden = true;
       }
-      void refreshActiveDeviceProfile(deviceSession);
     }
   } catch (error) {
     setConnection(null);
     clearProfile();
     activeDeviceProfile = null;
-    activeProfileReadState = "known";
+    activeProfileState = "known";
     showView("home");
     setMessage(errorMessage(error));
     setBusy(false);
@@ -1003,8 +1010,7 @@ async function readProfileFromDevice() {
   setBusy(true, "コントローラーのプロファイルを読み取っています…");
   try {
     const profile = await backend.readProfile(session.device.path);
-    activeDeviceProfile = [...profile.rawProfile];
-    activeProfileReadState = "known";
+    setKnownActiveProfile(profile.rawProfile, session);
     setEditingProfile({
       ...profile,
       name: "コントローラーから読み込んだプロファイル",
@@ -1115,8 +1121,7 @@ async function applySavedProfileToDevice(profile: ProfileDocument, session: Devi
     throw new Error("このプロファイルは接続中コントローラーに適用できません。");
   }
   const result = await backend.applyProfile(profile.rawProfile, session.device.path);
-  activeDeviceProfile = [...result.profile.rawProfile];
-  activeProfileReadState = "known";
+  setKnownActiveProfile(result.profile.rawProfile, session);
 }
 
 function applyDeviceSettings(settings: DeviceSettings) {

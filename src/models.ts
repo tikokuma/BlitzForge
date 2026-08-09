@@ -38,7 +38,7 @@ export type ProfileListEntry = {
   snapshot: ProfileSnapshot;
 };
 
-export type ActiveProfileReadState = "pending" | "known" | "unknown";
+export type ActiveProfileState = "known" | "remembered" | "unknown";
 
 export type CurveSettings = {
   center: number;

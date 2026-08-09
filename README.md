@@ -9,10 +9,10 @@ Production replacement for the BIGBIG WON settings application.
 - Shared official profile library backed by `%PROGRAMDATA%\GamepadAssistant\Config.db`
 - v37 profile read, CRC verification, official Share-code import/export, and unknown-byte preservation
 - Profile edits are saved to `Config.db` and automatically applied to the matching connected controller with `D7`
-- Device discovery uses the short `EF` UUID and `0B` ZKM probes; the large-transfer `D6` read runs in the background so startup is not blocked while the active profile is identified
+- Device discovery never issues the firmware-sensitive `D6` transfer automatically; the last successful `D7` apply or explicit `D6` read is remembered per controller UUID
 - Vibration, stick, keymap, and rapid-fire changes are combined into one profile save
 - SQLite writes use busy timeouts, transactions, optimistic conflict detection, and an online backup before the first write
-- On a read timeout, one read-only `D3` health probe distinguishes a dead interface from the observed large-transfer-path failure without flooding the firmware
+- On an explicit read timeout, one read-only `D3` health probe distinguishes a dead interface from the observed large-transfer-path failure without flooding the firmware
 
 ## Scope
 
