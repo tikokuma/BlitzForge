@@ -2,7 +2,7 @@
 
 This is the project history and decision log for the replacement applications.
 The exact HID frames, profile layout, byte mappings, captures, and CRC rules are
-maintained in [`docs/BIGBIGWON_HID_PROTOCOL.md`](../../docs/BIGBIGWON_HID_PROTOCOL.md).
+maintained in [`BIGBIGWON_HID_PROTOCOL.md`](BIGBIGWON_HID_PROTOCOL.md).
 
 ## Current state
 
@@ -122,7 +122,7 @@ The replacement scope is local USB/HID inspection and controller-profile access.
 ## Evidence index
 
 The full capture paths, hashes, byte dumps, and interpretation are kept in
-[`BIGBIGWON_HID_PROTOCOL.md`](../../docs/BIGBIGWON_HID_PROTOCOL.md). The main
+[`BIGBIGWON_HID_PROTOCOL.md`](BIGBIGWON_HID_PROTOCOL.md). The main
 captures are:
 
 - `tools/usbpcap/official-20260803-082927.pcap`: official-app D6 failure and interface comparison.

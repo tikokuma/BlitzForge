@@ -1,58 +1,89 @@
-# BIGBIGWON Lite (Tauri)
+# BlitzForge
 
-Production replacement for the BIGBIG WON settings application.
+BIGBIG WON Blitz2 の設定アプリを解析し、Tauri 2 + TypeScript + Rust で
+一から作り直している非公式アプリです。
 
-- Tauri 2
-- Vanilla TypeScript frontend
-- Rust HID transport using `hidapi`'s Windows native backend
-- Exact config-interface matching (`413D:2104`, Usage `FF7A:0001`)
-- Shared official profile library backed by `%PROGRAMDATA%\GamepadAssistant\Config.db`
-- v37 profile read, CRC verification, official Share-code import/export, and unknown-byte preservation
-- Profile edits are saved to `Config.db` and automatically applied to the matching connected controller with `D7`
-- Device discovery never issues the firmware-sensitive `D6` transfer automatically; the last successful `D7` apply or explicit `D6` read is remembered per controller UUID
-- Vibration, stick, keymap, and rapid-fire changes are combined into one profile save
-- SQLite writes use busy timeouts, transactions, optimistic conflict detection, and an online backup before the first write
-- On an explicit read timeout, one read-only `D3` health probe distinguishes a dead interface from the observed large-transfer-path failure without flooding the firmware
+## できること
 
-## Scope
+- v37 / 484バイトのプロファイル編集・保存
+- スティック、キーバインド、連射、振動の設定
+- ポーリングレート、ステップ精度の設定
+- マクロスロットの読み書き
+- 公式Shareコードの作成・読み込み
+- プロファイルのコントローラーへの適用
 
-LED control is intentionally not implemented. This is a deliberate scope decision, not an omitted feature.
+主な対象は、次の設定用HIDインターフェースを持つ Blitz2 です。
 
-The initial shared format is v37 with a 484-byte profile. Share-code exchange
-uses the same `shareConfig` and `importShareConfig` endpoints as the official
-application; no profile files are imported or exported. Other official profile
-formats remain visible in the library when possible, but editing and hardware
-application are disabled with an incompatibility reason. Macros and lighting
-remain hardware/database features outside the shared profile store.
+- VID: 413D / PID: 2104
+- Usage Page: 0xFF7A / Usage: 0x0001
 
-The first write creates an online SQLite backup under
-`%LOCALAPPDATA%\com.bigbigwon.lite\backups`. If the official app changes a
-profile after Lite opened it, Lite refuses to overwrite the row and offers a
-reload-or-save-as path.
+Windows向けです。別機種・別ファームウェアでの動作は保証していません。
+ファームウェア更新など一部の機能は未対応です。
 
-The C# project remains a reverse-engineering prototype. Protocol details are documented in `BIGBIGWON_HID_PROTOCOL.md`.
+## 注意
 
-```powershell
+BlitzForgeはコントローラーへ設定を書き込みます。初めて使う前に、公式アプリ
+の設定をバックアップしてください。実機の設定変更は自己責任で行ってください。
+
+プロファイルは公式アプリと同じデータベースを使用します。
+
+%PROGRAMDATA%\GamepadAssistant\Config.db
+
+初回の書き込み前には、次の場所へバックアップを作成します。
+
+%LOCALAPPDATA%\com.bigbigwon.lite\backups
+
+通常の起動・編集・保存ではネットワーク通信を行いません。Shareコードを
+使う場合だけ、公式アプリと互換性のあるShare APIへ設定データを送信します。
+
+## 開発
+
+必要なもの:
+
+- Node.js / npm
+- Rust toolchain
+- Tauri 2 のWindowsビルド環境
+
+~~~powershell
 npm install
 npm run tauri dev
-```
+~~~
 
-Production build:
+チェック:
 
-```powershell
-npm run tauri build
-```
-
-Use the Tauri CLI for production artifacts; plain `cargo build --release` retains the development URL. The packaged executable and installers are written below `src-tauri/target/release`.
-
-Checks:
-
-```powershell
+~~~powershell
 npm run check
-```
+~~~
 
-This runs the strict TypeScript production build, frontend domain tests, Rust
-format check, Clippy with warnings denied, and the Rust test suite.
+配布用ビルド:
 
-解析
-E:\dev\dev\BIGBIGWON
+~~~powershell
+npm run tauri build
+~~~
+
+## フォルダ構成
+
+~~~text
+.
+├── docs/          解析資料
+├── src/           TypeScript UI・ドメインロジック
+├── src-tauri/     Rustバックエンド・Tauri設定
+├── index.html
+├── LICENSE
+└── package.json
+~~~
+
+解析の詳細は次の資料を参照してください。
+
+- [HIDプロトコル解析](docs/BIGBIGWON_HID_PROTOCOL.md)
+- [再構築ログ](docs/BIGBIGWON_REBUILD_LOG.md)
+- [プロファイル実装計画](docs/PROFILE_IMPLEMENTATION_PLAN.md)
+
+## 非公式プロジェクトについて
+
+BlitzForgeはBIGBIG WONおよびBlitz2の権利者とは無関係です。
+製品名・ロゴなどの権利は各権利者に帰属します。
+
+## ライセンス
+
+MIT License

@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local controller data and traffic captures
+*.db
+*.db-shm
+*.db-wal
+*.pcap
+*.pcapng

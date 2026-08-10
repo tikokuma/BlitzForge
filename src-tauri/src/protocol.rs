@@ -275,7 +275,7 @@ pub fn new_v37_profile() -> Vec<u8> {
     profile[2..4].copy_from_slice(&(V37_PROFILE_LENGTH as u16).to_be_bytes());
 
     // These are the bytes used by the official app's v37 "default" profile.
-    // The six curve blocks are kept even though Lite currently exposes only
+    // The six curve blocks are kept even though BlitzForge currently exposes only
     // the first left/right pair; the official profile contains all six.
     profile[4..9].copy_from_slice(&[0, 5, 5, 5, 5]);
     const DEFAULT_CURVE: [u8; 0x0b] = [

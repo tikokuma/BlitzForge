@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "BIGBIGWON Lite",
+  "productName": "BlitzForge",
   "version": "0.1.0",
   "identifier": "com.bigbigwon.lite",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "BIGBIGWON Lite",
+        "title": "BlitzForge",
         "width": 860,
         "height": 620,
         "minWidth": 720,

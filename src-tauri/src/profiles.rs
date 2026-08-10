@@ -414,7 +414,7 @@ fn validate_name(name: &str) -> Result<String, String> {
 }
 
 fn profile_conflict(id: i64) -> String {
-    format!("PROFILE_CONFLICT: profile {id} changed outside BIGBIG WON Lite")
+    format!("PROFILE_CONFLICT: profile {id} changed outside BlitzForge")
 }
 
 fn ensure_backup(state: &mut ProfileStoreState, database_path: &Path) -> Result<(), String> {
@@ -619,7 +619,7 @@ mod tests {
         let error = save_profile_at_path(
             &mut state,
             &path,
-            save_input(Some(saved.id), Some(loaded.snapshot), "Lite change"),
+            save_input(Some(saved.id), Some(loaded.snapshot), "BlitzForge change"),
         )
         .expect_err("stale save must be rejected");
         assert!(error.starts_with("PROFILE_CONFLICT:"));

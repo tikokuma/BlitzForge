@@ -1358,7 +1358,7 @@ The same two-slot rule is applied to left/right and all six serialized curve blo
 
 The evidence is preserved in `tools/usbpcap/negative-right-center-20260809-b.pcap`, `tools/usbpcap/right-center0-edge3-baseline-20260809.pcap`, and `tools/usbpcap/negative-right-edge-20260809.pcap`.
 
-### Lite preview and range controls
+### BlitzForge preview and range controls
 
 The official preview does not paint deadzone regions. Lite now paints only the center/edge compensation bands and removes the deadzone overlays. A subtle midpoint tick is shown on each center, edge, and curve-point range control; it represents `0` on signed controls and `50` on `0..100` controls.
 
@@ -1408,8 +1408,8 @@ The second BUP entry, `c2sl_ota_dfu_fota_V33_20241011.fot`, restores from 22 zli
 - Macro recording and actual playback output, trigger output law, LED zone headers, screen-record initiation, and cloud/local profile metadata remain static-only or require live validation.
 - v34/v35/v36/v39/v60 converter layouts are known, but this workspace's full editor/write path is intentionally v37-only; other versions must remain raw-preserved until each is captured.
 
-### Lite shared profile-store boundary
+### BlitzForge shared profile-store boundary
 
-BIGBIG WON Lite shares profiles through the official `%PROGRAMDATA%\\GamepadAssistant\\Config.db` SQLite database. The `t_Config.FConfigJson` value is a JSON array of raw profile bytes; the supported editing format is v37 with a 484-byte payload and the normal v37 CRC. The database layer preserves unknown metadata and unknown profile bytes, uses optimistic snapshots to reject external overwrites, and creates an online backup before its first write.
+BlitzForge shares profiles through the official `%PROGRAMDATA%\\GamepadAssistant\\Config.db` SQLite database. The `t_Config.FConfigJson` value is a JSON array of raw profile bytes; the supported editing format is v37 with a 484-byte payload and the normal v37 CRC. The database layer preserves unknown metadata and unknown profile bytes, uses optimistic snapshots to reject external overwrites, and creates an online backup before its first write.
 
 Startup discovery uses the short `EF` device-UUID and `0B` ZKM-version queries. It does not issue `D6`. A `D6` read is only triggered by the explicit “read from device” action. Saving a profile updates SQLite only; applying a saved profile is a separate `D7` transaction with `A5 05 D7` ACK validation and no automatic `D6` readback.
