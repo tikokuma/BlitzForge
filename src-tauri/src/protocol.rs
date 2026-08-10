@@ -541,6 +541,11 @@ fn write_curve(
             ));
         }
     }
+    if curve.point1_x > curve.point2_x || curve.point1_y > curve.point2_y {
+        return Err(format!(
+            "{label} point1 must not exceed point2 on either axis"
+        ));
+    }
 
     if curve.center < 0 {
         profile[block + 2] = 0;
@@ -1113,6 +1118,40 @@ mod tests {
         let error = write_curve(&mut profile, V37_LEFT_DEFAULT_CURVE_OFFSET, curve, "left")
             .expect_err("curve Y above edge compensation must be rejected");
         assert!(error.contains("point2_y must be between 20 and 80"));
+
+        let curve = CurveSettings {
+            center: -20,
+            point1_x: 20,
+            point1_y: 60,
+            point2_x: 80,
+            point2_y: 60,
+            edge: -20,
+            stabilization: 0,
+        };
+        let error = write_curve(
+            &mut profile,
+            V37_LEFT_DEFAULT_CURVE_OFFSET,
+            CurveSettings {
+                point1_x: 81,
+                ..curve
+            },
+            "left",
+        )
+        .expect_err("point 1 X above point 2 must be rejected");
+        assert!(error.contains("point1 must not exceed point2"));
+
+        let error = write_curve(
+            &mut profile,
+            V37_LEFT_DEFAULT_CURVE_OFFSET,
+            CurveSettings {
+                point1_y: 70,
+                point2_y: 60,
+                ..curve
+            },
+            "left",
+        )
+        .expect_err("point 1 Y above point 2 must be rejected");
+        assert!(error.contains("point1 must not exceed point2"));
     }
 
     #[test]

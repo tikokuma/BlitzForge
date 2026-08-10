@@ -10,6 +10,7 @@ import {
   curvesEqual,
   curveYBounds,
 } from "./domain/curve";
+import type { CurveChange } from "./domain/curve";
 import {
   KEYMAP_DEFAULT_ENTRY,
   KEYMAP_VISIBLE_SOURCES,
@@ -96,7 +97,9 @@ let curveDrafts: Record<Stick, CurveSettings> = {
 };
 
 function setMessage(message: string) {
-  byId("message").textContent = message;
+  const target = byId("message");
+  target.textContent = message;
+  target.hidden = message.length === 0;
 }
 
 function setBusy(value: boolean, message?: string) {
@@ -108,6 +111,7 @@ function setBusy(value: boolean, message?: string) {
 }
 
 function syncActions() {
+  const macroDirty = macroEditor.isDirty();
   for (const id of ["home-view", "settings-view"] as const) {
     const view = byId(id);
     view.inert = busy;
@@ -117,8 +121,9 @@ function syncActions() {
   byId<HTMLButtonElement>("import-profile").disabled = busy;
   byId<HTMLButtonElement>("new-profile").disabled = busy;
   byId<HTMLButtonElement>("read-device-profile").disabled = busy || !deviceSession;
+  byId("settings-dirty").hidden = !settingsDirty && !vibrationDirty && !macroDirty;
   byId<HTMLButtonElement>("save-profile").disabled = busy || !editingProfile
-    || (editingProfile.saved && !settingsDirty && !vibrationDirty && !deviceSettingsDirty);
+    || (editingProfile.saved && !settingsDirty && !vibrationDirty && !deviceSettingsDirty && !macroDirty);
   macroEditor.syncActions();
 }
 
@@ -162,18 +167,8 @@ function renderDevice(session: DeviceSession | null) {
 }
 
 function setConnection(session: DeviceSession | null) {
-  const connection = byId("connection");
   deviceSession = session;
   renderDevice(session);
-
-  if (!session) {
-    connection.textContent = "未接続";
-    connection.className = "badge offline";
-    return;
-  }
-
-  connection.textContent = "接続済み";
-  connection.className = "badge online";
 }
 
 function clearProfile() {
@@ -182,22 +177,18 @@ function clearProfile() {
   vibrationDirty = false;
   deviceSettingsDirty = false;
   currentDeviceSettings = null;
-  byId("settings-profile-status").textContent = "";
   byId("settings-profile-name").textContent = "";
   byId<HTMLButtonElement>("save-profile").textContent = "プロファイルを保存";
   renderDetails("profile-details", []);
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
   byId("device-dirty").hidden = true;
+  macroEditor.reset();
   syncActions();
 }
 
 function renderProfile(profile: ProfileDocument) {
-  const crcState = profile.storedCrc === profile.computedCrc ? "一致" : "不一致";
   byId("settings-profile-name").textContent = profile.name;
-  byId("settings-profile-status").textContent = profile.saved
-    ? (crcState === "一致" ? "保存済み" : "CRC不一致")
-    : "未保存の編集";
   byId<HTMLButtonElement>("save-profile").textContent = "プロファイルを保存";
   const rapid = profile.settings.rapidFire;
   const rapidButtons = KEYMAP_VISIBLE_SOURCES
@@ -460,24 +451,22 @@ function readActiveCurve(): CurveSettings {
   };
 }
 
-function curveConstraintChange(id: string): "center" | "edge" | null {
+function curveConstraintChange(id: string): CurveChange | null {
   if (id === "curve-center") return "center";
   if (id === "curve-edge") return "edge";
+  if (id === "curve-p1-x" || id === "curve-p1-y") return "point1";
+  if (id === "curve-p2-x" || id === "curve-p2-y") return "point2";
   return null;
-}
-
-function isCurveY(id: string): boolean {
-  return id === "curve-p1-y" || id === "curve-p2-y";
 }
 
 function applyCurveConstraintsForControl(id: string): boolean {
   const changed = curveConstraintChange(id);
-  if (changed === null && !isCurveY(id)) return false;
-  constrainActiveCurve(changed ?? undefined);
+  if (changed === null) return false;
+  constrainActiveCurve(changed);
   return true;
 }
 
-function constrainActiveCurve(changed?: "center" | "edge") {
+function constrainActiveCurve(changed?: CurveChange) {
   setActiveCurve(readActiveCurve(), changed);
 }
 
@@ -485,7 +474,7 @@ function syncActiveCurveDraft() {
   curveDrafts[selectedStick] = constrainCurve(readActiveCurve());
 }
 
-function setActiveCurve(curve: CurveSettings, changed?: "center" | "edge") {
+function setActiveCurve(curve: CurveSettings, changed?: CurveChange) {
   const safeCurve = constrainCurve(curve, changed);
   setRangeControl("curve-center", safeCurve.center);
   setRangeControl("curve-p1-x", safeCurve.point1X);
@@ -508,7 +497,6 @@ function selectStick(stick: Stick) {
   byId("stick-right-tab").classList.toggle("active", !left);
   byId("stick-left-tab").setAttribute("aria-selected", String(left));
   byId("stick-right-tab").setAttribute("aria-selected", String(!left));
-  byId("stick-description").textContent = `${left ? "左" : "右"}スティックの設定`;
   updateCurvePreview();
 }
 
@@ -592,7 +580,7 @@ function setPointFromPointer(point: CurvePoint, event: PointerEvent) {
   const [xId, yId] = curvePointAxes[point];
   byId<HTMLInputElement>(xId).value = String(x);
   byId<HTMLInputElement>(yId).value = String(y);
-  constrainActiveCurve();
+  constrainActiveCurve(point);
   markSettingsDirty();
 }
 
@@ -830,7 +818,8 @@ function renderProfileLibrary() {
   }
 }
 
-function setEditingProfile(profile: ProfileDocument) {
+function setEditingProfile(profile: ProfileDocument, preserveMacro = false) {
+  if (!preserveMacro) macroEditor.reset();
   editingProfile = profile;
   settingsDirty = false;
   vibrationDirty = false;
@@ -850,7 +839,7 @@ async function openSavedProfile(id: number) {
   try {
     setEditingProfile(await backend.loadSavedProfile(id));
     showView("settings");
-    setMessage("プロファイルを開きました。コントローラー未接続でも編集できます。");
+    setMessage("");
   } catch (error) {
     setMessage(errorMessage(error));
     await refreshProfiles().catch(() => undefined);
@@ -902,7 +891,7 @@ async function renameProfile(entry: ProfileListEntry) {
       zkmVersion: source.zkmVersion,
       snapshot: source.snapshot,
     });
-    if (editingProfile?.id === saved.id) setEditingProfile(saved);
+    if (editingProfile?.id === saved.id) setEditingProfile(saved, true);
     await refreshProfiles();
     setMessage("プロファイル名を変更しました。");
   } catch (error) {
@@ -1146,7 +1135,23 @@ async function saveProfileDocument() {
   if (!profile) return;
   const session = deviceSession;
   const profileNeedsSave = !profile.saved || settingsDirty || vibrationDirty;
-  if (!profileNeedsSave && !deviceSettingsDirty) return;
+  const macroNeedsSave = macroEditor.isDirty();
+  if (!profileNeedsSave && !macroNeedsSave && !deviceSettingsDirty) return;
+  if (!profileNeedsSave && macroNeedsSave) {
+    setBusy(true, "マクロを保存しています…");
+    try {
+      await macroEditor.save();
+      if (session && deviceSettingsDirty) {
+        await saveDeviceSettingsToDevice(session);
+      }
+      setMessage(deviceSettingsDirty ? "マクロとデバイス設定を保存しました。" : "マクロを保存しました。");
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
   if (!profileNeedsSave) {
     if (!session) return;
     setBusy(true, "ポーリングレートとステップ精度を保存しています…");
@@ -1188,7 +1193,10 @@ async function saveProfileDocument() {
       snapshot: profile.snapshot,
     };
     const saved = await backend.saveProfile(input);
-    setEditingProfile(saved);
+    if (macroNeedsSave) {
+      await macroEditor.save();
+    }
+    setEditingProfile(saved, true);
     const matchesSession = session !== null && profileMatchesDevice(saved, session);
     if (matchesSession) {
       await applySavedProfileToDevice(saved, session);
@@ -1220,7 +1228,10 @@ async function saveProfileDocument() {
               zkmVersion: profile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
               snapshot: null,
             });
-            setEditingProfile(saved);
+            if (macroNeedsSave) {
+              await macroEditor.save();
+            }
+            setEditingProfile(saved, true);
             if (session && profileMatchesDevice(saved, session)) {
               await applySavedProfileToDevice(saved, session);
             }

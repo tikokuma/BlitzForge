@@ -29,20 +29,44 @@ type MacroEditorHost = {
 export type MacroEditor = {
   setup: () => void;
   syncActions: () => void;
+  isDirty: () => boolean;
+  reset: () => void;
+  save: () => Promise<void>;
 };
 
 export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   let summary: MacroSummary | null = null;
   let draftRecord: number[] | null = null;
+  let originalRecord: number[] | null = null;
+  let selectedSlot = 0;
+
+  function recordsEqual(left: number[], right: number[]): boolean {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+  }
+
+  function isDirty(): boolean {
+    return draftRecord !== null
+      && originalRecord !== null
+      && !recordsEqual(draftRecord, originalRecord);
+  }
+
+  function reset(): void {
+    summary = null;
+    draftRecord = null;
+    originalRecord = null;
+    selectedSlot = 0;
+    byId("macro-slots").replaceChildren();
+    byId("macro-step-list").replaceChildren();
+    byId("macro-slot-details").textContent = "コントローラーからマクロを読み込んでください。";
+    byId("macro-output").textContent = "";
+    host.syncHostActions();
+  }
 
   function syncActions(): void {
     const busy = host.isBusy();
     byId<HTMLButtonElement>("add-macro-step").disabled = busy
       || draftRecord === null
       || macroStepCount(draftRecord) >= MACRO_MAX_STEPS;
-    byId<HTMLButtonElement>("write-macro").disabled = busy
-      || host.getDevicePath() === null
-      || draftRecord === null;
   }
 
   function setSelectValue(id: string, value: number): void {
@@ -92,7 +116,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   }
 
   function slotDescription(slot: MacroSlotSummary): string {
-    const state = slot.error ? "読み取り失敗" : slot.stepCount === 0 ? "空" : `${slot.stepCount}ステップ`;
+    const state = slot.error ? "読み取り失敗" : slot.stepCount === 0 ? "空" : `${slot.stepCount}操作`;
     return `スロット ${slot.slot + 1} · ${state} · 呼び出し ${macroRunKeyLabel(slot.runKey)}`;
   }
 
@@ -118,7 +142,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     if (count === 0) {
       const empty = document.createElement("p");
       empty.className = "empty-hint";
-      empty.textContent = "この枠は空です。「ステップを追加」から作成できます。";
+      empty.textContent = "この枠は空です。「操作を追加」から作成できます。";
       container.append(empty);
       return;
     }
@@ -131,7 +155,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       const heading = document.createElement("div");
       heading.className = "macro-step-heading";
       const title = document.createElement("strong");
-      title.textContent = `ステップ ${index + 1}`;
+      title.textContent = `操作 ${index + 1}`;
       const stepSummary = document.createElement("span");
       const labels = macroInputLabels(step.inputMask);
       stepSummary.textContent = `${step.durationMs} ms · ${labels.length > 0 ? labels.join(" + ") : "入力なし"}`;
@@ -230,7 +254,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   function addStep(): void {
     if (!draftRecord) return;
     if (macroStepCount(draftRecord) >= MACRO_MAX_STEPS) {
-      host.setMessage("マクロは最大64ステップです。");
+      host.setMessage("マクロは最大64操作です。");
       return;
     }
     draftRecord = appendMacroStep(draftRecord);
@@ -241,9 +265,11 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   function selectSlot(slot: number): void {
     const selected = summary?.slots.find((entry) => entry.slot === slot);
     if (!selected) return;
+    selectedSlot = slot;
     byId<HTMLSelectElement>("macro-slot").value = String(slot);
     byId("macro-editor-title").textContent = `スロット ${slot + 1} の編集`;
     const validRecord = isMacroRecord(selected.rawRecord);
+    originalRecord = validRecord ? selected.rawRecord.slice() : null;
     draftRecord = validRecord ? selected.rawRecord.slice() : null;
     if (draftRecord) renderHeader(draftRecord);
     renderSteps(draftRecord);
@@ -292,33 +318,33 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     }
   }
 
-  async function write(): Promise<void> {
+  async function save(): Promise<void> {
+    if (!isDirty()) return;
     const path = host.getDevicePath();
-    if (!path) return;
-    try {
-      const slot = Number(byId<HTMLSelectElement>("macro-slot").value);
-      if (!draftRecord) {
-        throw new Error("先にコントローラーからマクロを読み込んでください");
-      }
-      const record = updateHeaderFromControls(draftRecord);
-      draftRecord = record;
-      host.setBusy(true, `マクロ スロット${slot + 1}を保存後、コントローラーから読み返しています…`);
-      const result = await backend.writeMacro(path, slot, record);
-      if (summary) {
-        renderSummary({
-          ...summary,
-          slots: summary.slots.map((entry) => entry.slot === slot ? result.slot : entry),
-        });
-      }
-      byId("macro-output").textContent = `${slotDescription(result.slot)}を保存しました。`;
-      host.setMessage(`マクロ スロット${slot + 1}を保存しました。`);
-    } catch (error) {
-      const message = errorMessage(error);
-      byId("macro-output").textContent = message;
-      host.setMessage(message);
-    } finally {
-      host.setBusy(false);
+    if (!path) {
+      throw new Error("マクロを保存するにはコントローラーを接続してください。");
     }
+    if (!draftRecord) return;
+
+    const record = updateHeaderFromControls(draftRecord);
+    draftRecord = record;
+    const result = await backend.writeMacro(path, selectedSlot, record);
+    const savedRecord = result.slot.rawRecord.slice();
+    originalRecord = savedRecord.slice();
+    draftRecord = savedRecord.slice();
+    if (summary) {
+      summary = {
+        ...summary,
+        slots: summary.slots.map((item) => item.slot === selectedSlot ? result.slot : item),
+      };
+      renderSummary(summary);
+    } else {
+      renderHeader(savedRecord);
+      renderSteps(savedRecord);
+    }
+    byId("macro-slot-details").textContent = `${slotDescription(result.slot)}。保存しました。`;
+    byId("macro-output").textContent = `${slotDescription(result.slot)}を保存しました。`;
+    host.syncHostActions();
   }
 
   function syncHeaderFromControls(): void {
@@ -328,6 +354,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       renderHeader(draftRecord);
       const slot = Number(byId<HTMLSelectElement>("macro-slot").value) + 1;
       byId("macro-slot-details").textContent = `スロット ${slot}を編集中です。`;
+      host.syncHostActions();
     } catch (error) {
       host.setMessage(errorMessage(error));
     }
@@ -335,7 +362,6 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
 
   function setup(): void {
     byId("refresh-macros").addEventListener("click", () => void refresh());
-    byId("write-macro").addEventListener("click", () => void write());
     byId<HTMLSelectElement>("macro-slot").addEventListener("change", (event) => {
       selectSlot(Number((event.target as HTMLSelectElement).value));
     });
@@ -351,5 +377,5 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     }
   }
 
-  return { setup, syncActions };
+  return { setup, syncActions, isDirty, reset, save };
 }

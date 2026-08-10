@@ -1,6 +1,6 @@
 import type { CurveSettings } from "../models";
 
-export type CurveCompensation = "center" | "edge";
+export type CurveChange = "center" | "edge" | "point1" | "point2";
 
 const clampInteger = (value: number, min: number, max: number): number => {
   const integer = Number.isFinite(value) ? Math.round(value) : 0;
@@ -20,7 +20,18 @@ export function curveYBounds(curve: Pick<CurveSettings, "center" | "edge">): { m
   };
 }
 
-export function constrainCurve(curve: CurveSettings, changed?: CurveCompensation): CurveSettings {
+function constrainOrderedPair(
+  point1: number,
+  point2: number,
+  changed?: CurveChange,
+): [number, number] {
+  if (changed === "point1") {
+    return [Math.min(point1, point2), point2];
+  }
+  return [point1, Math.max(point1, point2)];
+}
+
+export function constrainCurve(curve: CurveSettings, changed?: CurveChange): CurveSettings {
   const next: CurveSettings = {
     center: clampInteger(curve.center, -100, 100),
     point1X: clampPercentage(curve.point1X),
@@ -44,6 +55,8 @@ export function constrainCurve(curve: CurveSettings, changed?: CurveCompensation
   const bounds = curveYBounds(next);
   next.point1Y = clampInteger(next.point1Y, bounds.min, bounds.max);
   next.point2Y = clampInteger(next.point2Y, bounds.min, bounds.max);
+  [next.point1X, next.point2X] = constrainOrderedPair(next.point1X, next.point2X, changed);
+  [next.point1Y, next.point2Y] = constrainOrderedPair(next.point1Y, next.point2Y, changed);
   return next;
 }
 

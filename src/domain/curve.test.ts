@@ -58,6 +58,13 @@ describe("constrainCurve", () => {
     expect(curveYBounds(result)).toEqual({ min: 20, max: 70 });
     expect(result).toMatchObject({ point1Y: 20, point2Y: 70 });
   });
+
+  it("keeps point one at or below point two on both axes", () => {
+    expect(constrainCurve(curve({ point1X: 90, point1Y: 90, point2X: 40, point2Y: 40 }), "point1"))
+      .toMatchObject({ point1X: 40, point1Y: 40, point2X: 40, point2Y: 40 });
+    expect(constrainCurve(curve({ point1X: 40, point1Y: 40, point2X: 10, point2Y: 10 }), "point2"))
+      .toMatchObject({ point1X: 40, point1Y: 40, point2X: 40, point2Y: 40 });
+  });
 });
 
 describe("curvesEqual", () => {

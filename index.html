@@ -18,7 +18,6 @@
             <small>CONTROL CENTER</small>
           </div>
         </div>
-        <span id="connection" class="badge">確認中</span>
       </div>
       <div class="window-controls" aria-label="ウィンドウ操作">
         <button id="window-minimize" class="window-control" type="button" aria-label="最小化"><span aria-hidden="true">−</span></button>
@@ -63,7 +62,6 @@
         <div class="settings-toolbar">
           <button id="back-home" class="back-button">← 概要へ戻る</button>
           <strong id="settings-profile-name"></strong>
-          <span id="settings-profile-status" class="status-pill"></span>
           <span id="settings-dirty" class="status-pill" hidden>未保存</span>
           <button id="save-profile" class="primary" data-operation disabled>プロファイルを保存</button>
         </div>
@@ -81,7 +79,6 @@
             <div>
               <p class="section-kicker">STICK RESPONSE</p>
               <h2>スティック曲線</h2>
-              <p id="stick-description">左スティックの反応を調整します。</p>
             </div>
             <span id="curve-dirty" class="status-pill" hidden>未保存</span>
           </div>
@@ -112,7 +109,6 @@
               <section class="stick-control-group">
                 <div class="group-heading">
                   <h3>反応曲線</h3>
-                  <p>グラフ上の2点と、X/Yの値を調整します。</p>
                 </div>
                 <div class="range-field">
                   <div class="range-label"><label for="curve-p1-x">ポイント1 X</label><input id="curve-p1-x-value" class="value-input" type="number" min="0" max="100" step="1" value="0" inputmode="numeric" aria-label="ポイント1 Xの値" /></div>
@@ -185,7 +181,6 @@
             <div>
               <p class="section-kicker">KEY BINDINGS</p>
               <h2>キーバインド</h2>
-              <p>コントローラーの入力ごとに割り当てを変更します。</p>
             </div>
           </div>
           <div class="keymap-toolbar">
@@ -199,7 +194,7 @@
           <div class="section-heading">
             <div>
               <p class="section-kicker">MACRO</p>
-              <h2>マクロ（任意）</h2>
+              <h2>マクロ</h2>
               <p>通常のボタン割り当てと連射だけなら不要です。M1〜M4で複数操作を再生するときだけ使います。</p>
             </div>
           </div>
@@ -224,7 +219,7 @@
             <section class="stick-control-group">
               <div class="group-heading">
                 <h3>マクロスロット</h3>
-                <p>4つの保存枠から編集する枠を選びます。空の枠にはステップを追加できます。</p>
+                <p>4つの保存枠から編集する枠を選びます。空の枠には操作を追加できます。</p>
               </div>
               <div class="macro-toolbar">
                 <button id="refresh-macros" type="button">コントローラーから読み込む</button>
@@ -246,11 +241,10 @@
             <div class="section-heading">
               <div>
                 <h3 id="macro-editor-title">マクロを読み込んでください</h3>
-                <p>1ステップは「何ms押すか」「どの入力を出すか」「スティック値」です。時間は8ms単位に丸められます。</p>
+                <p>操作を1つ追加すると、押す時間・入力・スティック値を設定できます。時間は8ms単位に丸められます。</p>
               </div>
               <div class="button-row">
-                <button id="add-macro-step" type="button" disabled>ステップを追加</button>
-                <button id="write-macro" class="primary" type="button" disabled>この枠を保存</button>
+                <button id="add-macro-step" type="button" disabled>操作を追加</button>
               </div>
             </div>
             <div class="macro-friendly-header">
@@ -290,7 +284,6 @@
             </div>
             <div class="button-row">
               <span id="device-dirty" class="status-pill" hidden>未保存</span>
-              <span class="status-pill">上部の「プロファイルを保存」で保存</span>
             </div>
           </div>
           <div class="device-settings-grid">
@@ -327,7 +320,6 @@
               <p class="section-kicker">VIBRATION</p>
               <h2>バイブレーションレベル</h2>
             </div>
-            <span class="status-pill">上部の「プロファイルを保存」で保存</span>
           </div>
           <div class="vibration-mode-field range-field">
             <div class="range-label"><label for="vibration-mode">振動モード</label></div>
