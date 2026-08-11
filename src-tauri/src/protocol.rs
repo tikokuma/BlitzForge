@@ -184,9 +184,9 @@ pub fn build_set_step_accuracy_report(settings: StepAccuracySettings) -> Vec<u8>
 pub fn decode_polling_rate(report: &[u8]) -> Result<u8, String> {
     let payload = short_command_payload(report, 0xf6)?;
     payload
-        .first()
+        .get(1)
         .copied()
-        .ok_or_else(|| "polling-rate response has no value".into())
+        .ok_or_else(|| "polling-rate response has no rate code".into())
 }
 
 pub fn decode_step_accuracy(report: &[u8]) -> Result<StepAccuracySettings, String> {
