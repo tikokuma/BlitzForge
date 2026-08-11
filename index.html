@@ -28,7 +28,7 @@
     <main class="app-shell">
       <nav id="main-tabs" class="main-tabs" aria-label="メイン画面">
         <button id="main-tab-home" class="tab active" type="button" aria-selected="true">概要</button>
-        <button id="main-tab-diagnostics" class="tab" type="button" aria-selected="false">入力診断</button>
+        <button id="main-tab-diagnostics" class="tab" type="button" aria-selected="false">入力チェック</button>
       </nav>
       <div id="home-view" class="view">
         <section class="panel device-panel">
@@ -362,10 +362,9 @@
       <div id="diagnostics-view" class="view" hidden>
         <div class="settings-toolbar">
           <button id="diagnostics-back-home" class="back-button" type="button">← 概要へ戻る</button>
-          <strong>入力診断</strong>
         </div>
 
-        <nav class="diagnostics-tabs" role="tablist" aria-label="入力診断カテゴリ">
+        <nav class="diagnostics-tabs" role="tablist" aria-label="入力チェックカテゴリ">
           <button id="diagnostics-tab-viewer" class="tab active" type="button" role="tab" aria-selected="true">Input Viewer</button>
           <button id="diagnostics-tab-polling" class="tab" type="button" role="tab" aria-selected="false">Polling Monitor</button>
         </nav>

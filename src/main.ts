@@ -873,10 +873,8 @@ function renderProfileLibrary() {
     const details = document.createElement("p");
     details.className = "profile-card-details";
     details.textContent = [
-      entry.deviceName || "機種情報なし",
       entry.deviceUuid ? `UUID ${entry.deviceUuid}` : "UUIDなし",
       entry.profileVersion ?? "バージョン不明",
-      `${entry.profileLength} bytes`,
       entry.createdAt || "日時不明",
     ].join(" · ");
     const actions = document.createElement("div");
