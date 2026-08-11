@@ -592,28 +592,20 @@ fn add_curve_changes(
         before.center,
         after.center,
     );
-    add_change(
+    add_curve_point_change(
         changes,
-        &format!("{stick_label} / ポイント1 X"),
+        &format!("{stick_label} / ポイント1"),
         before.point1_x,
-        after.point1_x,
-    );
-    add_change(
-        changes,
-        &format!("{stick_label} / ポイント1 Y"),
         before.point1_y,
+        after.point1_x,
         after.point1_y,
     );
-    add_change(
+    add_curve_point_change(
         changes,
-        &format!("{stick_label} / ポイント2 X"),
+        &format!("{stick_label} / ポイント2"),
         before.point2_x,
-        after.point2_x,
-    );
-    add_change(
-        changes,
-        &format!("{stick_label} / ポイント2 Y"),
         before.point2_y,
+        after.point2_x,
         after.point2_y,
     );
     add_change(
@@ -627,6 +619,38 @@ fn add_curve_changes(
         &format!("{stick_label} / 安定化"),
         signed_stabilization(before.stabilization),
         signed_stabilization(after.stabilization),
+    );
+}
+
+fn add_curve_point_change(
+    changes: &mut Vec<SettingChange>,
+    label: &str,
+    before_x: u8,
+    before_y: u8,
+    after_x: u8,
+    after_y: u8,
+) {
+    let x_changed = before_x != after_x;
+    let y_changed = before_y != after_y;
+    if !x_changed && !y_changed {
+        return;
+    }
+
+    let mut before_values = Vec::with_capacity(2);
+    let mut after_values = Vec::with_capacity(2);
+    if x_changed {
+        before_values.push(format!("x{before_x}"));
+        after_values.push(format!("x{after_x}"));
+    }
+    if y_changed {
+        before_values.push(format!("y{before_y}"));
+        after_values.push(format!("y{after_y}"));
+    }
+    add_change(
+        changes,
+        label,
+        before_values.join(" "),
+        after_values.join(" "),
     );
 }
 
@@ -1518,6 +1542,48 @@ mod tests {
         assert_eq!(changes[0].label, "キーバインド / A");
         assert_eq!(changes[0].before, "A（標準）");
         assert_eq!(changes[0].after, "A");
+    }
+
+    #[test]
+    fn groups_curve_point_coordinates_in_profile_changes() {
+        let curve_offset = protocol::V37_LEFT_DEFAULT_CURVE_OFFSET;
+        let mut before = protocol::new_v37_profile();
+        before[curve_offset + 4] = 10;
+        before[curve_offset + 5] = 10;
+        let mut after = before.clone();
+        after[curve_offset + 4] = 20;
+        after[curve_offset + 5] = 20;
+
+        let before_crc = protocol::profile_crc(&before).unwrap();
+        before[..2].copy_from_slice(&before_crc.to_be_bytes());
+        let after_crc = protocol::profile_crc(&after).unwrap();
+        after[..2].copy_from_slice(&after_crc.to_be_bytes());
+
+        let changes = profile_changes(&before, &after).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].label, "左スティック / ポイント1");
+        assert_eq!(changes[0].before, "x10 y10");
+        assert_eq!(changes[0].after, "x20 y20");
+    }
+
+    #[test]
+    fn shows_only_changed_curve_coordinate_in_profile_changes() {
+        let curve_offset = protocol::V37_LEFT_DEFAULT_CURVE_OFFSET;
+        let mut before = protocol::new_v37_profile();
+        before[curve_offset + 4] = 10;
+        before[curve_offset + 5] = 10;
+        let mut after = before.clone();
+        after[curve_offset + 4] = 20;
+
+        let before_crc = protocol::profile_crc(&before).unwrap();
+        before[..2].copy_from_slice(&before_crc.to_be_bytes());
+        let after_crc = protocol::profile_crc(&after).unwrap();
+        after[..2].copy_from_slice(&after_crc.to_be_bytes());
+
+        let changes = profile_changes(&before, &after).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].before, "x10");
+        assert_eq!(changes[0].after, "x20");
     }
 }
 

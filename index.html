@@ -369,10 +369,15 @@
             <button id="save-dialog-cancel" class="dialog-close" type="button" aria-label="閉じる">×</button>
           </div>
           <section class="save-dialog-diff" aria-labelledby="save-diff-title">
-            <h3 id="save-diff-title">変更した設定</h3>
-            <label class="save-diff-select-label" for="save-diff-select">設定を選択</label>
-            <select id="save-diff-select" class="save-diff-select"></select>
-            <p id="save-diff-value" class="save-diff-value" aria-live="polite"></p>
+            <div class="save-diff-heading">
+              <div>
+                <h3 id="save-diff-title">変更した設定</h3>
+                <p class="save-diff-description">保存される項目と変更前後の値</p>
+              </div>
+              <span id="save-diff-count" class="status-pill">0件</span>
+            </div>
+            <div id="save-diff-list" class="save-diff-list" role="list" aria-live="polite"></div>
+            <p id="save-diff-empty" class="save-diff-empty" hidden>変更された項目はありません。</p>
           </section>
           <p id="save-dialog-apply-note" class="save-dialog-note"></p>
           <div class="save-dialog-footer">
@@ -415,7 +420,7 @@
         </div>
       </dialog>
 
-      <p id="message" role="status" hidden>準備しています…</p>
+      <p id="notification-overlay" role="status" aria-live="polite" hidden></p>
     </main>
   </body>
 </html>

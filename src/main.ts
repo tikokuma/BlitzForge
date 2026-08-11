@@ -103,18 +103,48 @@ let rectangleAlgorithmDraft: RectangleAlgorithmSettings = {
   rightStick: false,
 };
 type SaveMode = "save" | "apply";
+type NotificationKind = "error" | "success";
+let notificationTimer: number | null = null;
 
-function setMessage(message: string) {
-  const target = byId("message");
-  target.textContent = message;
-  target.hidden = message.length === 0;
+function clearNotification() {
+  if (notificationTimer !== null) {
+    window.clearTimeout(notificationTimer);
+    notificationTimer = null;
+  }
+  const target = byId("notification-overlay");
+  target.textContent = "";
+  target.hidden = true;
+  target.removeAttribute("data-kind");
+  target.setAttribute("role", "status");
+  target.setAttribute("aria-live", "polite");
 }
 
-function setBusy(value: boolean, message?: string) {
+function showNotification(message: string, kind: NotificationKind) {
+  clearNotification();
+  if (message.length === 0) return;
+  const target = byId("notification-overlay");
+  target.textContent = message;
+  target.dataset.kind = kind;
+  target.hidden = false;
+  target.setAttribute("role", kind === "error" ? "alert" : "status");
+  target.setAttribute("aria-live", kind === "error" ? "assertive" : "polite");
+  notificationTimer = window.setTimeout(clearNotification, 5000);
+}
+
+function showError(message: string) {
+  const localizedMessage = message.startsWith("Missing UI element #")
+    ? "画面の表示に必要な要素が見つかりません。"
+    : message;
+  showNotification(localizedMessage, "error");
+}
+
+function showSuccess(message: string) {
+  showNotification(message, "success");
+}
+
+function setBusy(value: boolean) {
   busy = value;
-  if (message !== undefined) {
-    setMessage(message);
-  }
+  if (value) clearNotification();
   syncActions();
 }
 
@@ -138,7 +168,7 @@ const macroEditor = createMacroEditor({
   getDevicePath: () => deviceSession?.device.path ?? null,
   isBusy: () => busy,
   setBusy,
-  setMessage,
+  showError,
   syncHostActions: syncActions,
 });
 
@@ -675,7 +705,7 @@ function showView(view: "home" | "settings") {
   const settingsVisible = view === "settings";
   byId("home-view").hidden = settingsVisible;
   byId("settings-view").hidden = !settingsVisible;
-  byId("message").hidden = false;
+  clearNotification();
   if (settingsVisible && editingProfile) {
     selectSettingsTab("stick");
   }
@@ -702,39 +732,58 @@ function profileMatchesDevice(
   return deviceUuidsEqual(profile.deviceUuid, session?.uuid ?? "");
 }
 
-function renderSelectedSaveDiff(): void {
-  const select = byId<HTMLSelectElement>("save-diff-select");
-  const option = select.selectedOptions[0];
-  byId("save-diff-value").textContent = option?.dataset.before !== undefined
-    && option.dataset.after !== undefined
-    ? `変更前: ${option.dataset.before} → 変更後: ${option.dataset.after}`
-    : "";
-}
-
 function renderSaveDialog(preview: CommitPreview): void {
   const profile = editingProfile;
   if (!profile) return;
-  const select = byId<HTMLSelectElement>("save-diff-select");
-  select.replaceChildren();
+  const list = byId("save-diff-list");
+  const empty = byId("save-diff-empty");
+  list.replaceChildren();
+  byId("save-diff-count").textContent = `${preview.changes.length}件`;
   if (preview.changes.length === 0) {
-    const option = document.createElement("option");
-    option.textContent = "変更された項目はありません。";
-    option.disabled = true;
-    select.append(option);
-    select.disabled = true;
+    empty.hidden = false;
   } else {
-    select.disabled = false;
-    select.append(...preview.changes.map((item, index) => {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = item.label;
-      option.dataset.before = item.before;
-      option.dataset.after = item.after;
-      return option;
+    empty.hidden = true;
+    list.append(...preview.changes.map((item, index) => {
+      const row = document.createElement("article");
+      row.className = "save-diff-item";
+      row.setAttribute("role", "listitem");
+
+      const heading = document.createElement("div");
+      heading.className = "save-diff-item-heading";
+      const label = document.createElement("strong");
+      label.className = "save-diff-item-label";
+      label.textContent = item.label;
+      const number = document.createElement("span");
+      number.className = "save-diff-item-number";
+      number.textContent = String(index + 1).padStart(2, "0");
+      heading.append(label, number);
+
+      const values = document.createElement("div");
+      values.className = "save-diff-item-values";
+      const before = document.createElement("div");
+      before.className = "save-diff-side save-diff-before";
+      const beforeLabel = document.createElement("span");
+      beforeLabel.textContent = "変更前";
+      const beforeValue = document.createElement("strong");
+      beforeValue.textContent = item.before;
+      before.append(beforeLabel, beforeValue);
+      const arrow = document.createElement("span");
+      arrow.className = "save-diff-arrow";
+      arrow.setAttribute("aria-hidden", "true");
+      arrow.textContent = "→";
+      const after = document.createElement("div");
+      after.className = "save-diff-side save-diff-after";
+      const afterLabel = document.createElement("span");
+      afterLabel.textContent = "変更後";
+      const afterValue = document.createElement("strong");
+      afterValue.textContent = item.after;
+      after.append(afterLabel, afterValue);
+      values.append(before, arrow, after);
+
+      row.append(heading, values);
+      return row;
     }));
-    select.value = "0";
   }
-  renderSelectedSaveDiff();
   byId("save-dialog-profile-name").textContent = profile.name;
   byId<HTMLButtonElement>("save-dialog-only").disabled = preview.changes.length === 0;
   const canApply = preview.applyEligible;
@@ -747,14 +796,14 @@ function renderSaveDialog(preview: CommitPreview): void {
 async function openSaveDialog(): Promise<void> {
   if (busy || !editingProfile) return;
   const profile = editingProfile;
-  setBusy(true, "保存内容を確認しています…");
+  setBusy(true);
   try {
     const preview = await backend.previewProfileCommit(buildCommitProfileInput(profile, profile.name, "save"));
     renderSaveDialog(preview);
     const dialog = byId<HTMLDialogElement>("save-dialog");
     if (!dialog.open) dialog.showModal();
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -903,13 +952,12 @@ async function refreshProfiles() {
 }
 
 async function openSavedProfile(id: number) {
-  setBusy(true, "プロファイルを読み込んでいます…");
+  setBusy(true);
   try {
     setEditingProfile(await backend.loadSavedProfile(id));
     showView("settings");
-    setMessage("");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
     await refreshProfiles().catch(() => undefined);
   } finally {
     setBusy(false);
@@ -919,7 +967,7 @@ async function openSavedProfile(id: number) {
 async function duplicateProfile(entry: ProfileListEntry) {
   const name = window.prompt("複製後のプロファイル名", `${entry.name} コピー`);
   if (name === null) return;
-  setBusy(true, "プロファイルを複製しています…");
+  setBusy(true);
   try {
     const source = await backend.loadSavedProfile(entry.id);
     const saved = await backend.saveProfile({
@@ -935,9 +983,8 @@ async function duplicateProfile(entry: ProfileListEntry) {
     setEditingProfile(saved);
     await refreshProfiles();
     showView("settings");
-    setMessage("プロファイルを複製しました。");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -946,7 +993,7 @@ async function duplicateProfile(entry: ProfileListEntry) {
 async function renameProfile(entry: ProfileListEntry) {
   const name = window.prompt("新しいプロファイル名", entry.name);
   if (name === null || name.trim() === entry.name) return;
-  setBusy(true, "プロファイル名を変更しています…");
+  setBusy(true);
   try {
     const source = await backend.loadSavedProfile(entry.id);
     const saved = await backend.saveProfile({
@@ -961,9 +1008,8 @@ async function renameProfile(entry: ProfileListEntry) {
     });
     if (editingProfile?.id === saved.id) setEditingProfile(saved, true);
     await refreshProfiles();
-    setMessage("プロファイル名を変更しました。");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -971,7 +1017,7 @@ async function renameProfile(entry: ProfileListEntry) {
 
 async function deleteProfile(entry: ProfileListEntry) {
   if (!window.confirm(`「${entry.name}」を削除しますか？`)) return;
-  setBusy(true, "プロファイルを削除しています…");
+  setBusy(true);
   try {
     await backend.deleteProfile(entry.id, entry.snapshot);
     if (editingProfile?.id === entry.id) {
@@ -979,14 +1025,13 @@ async function deleteProfile(entry: ProfileListEntry) {
       showView("home");
     }
     await refreshProfiles();
-    setMessage("プロファイルを削除しました。");
   } catch (error) {
     const message = errorMessage(error);
     if (message.startsWith("PROFILE_CONFLICT:")) {
-      setMessage("公式アプリ側で変更されています。再読込してから削除してください。");
+      showError("公式アプリ側で変更されています。再読込してから削除してください。");
       await refreshProfiles().catch(() => undefined);
     } else {
-      setMessage(message);
+      showError(message);
     }
   } finally {
     setBusy(false);
@@ -1016,7 +1061,7 @@ function setKnownActiveProfile(rawProfile: readonly number[], session: DeviceSes
 async function scan() {
   let deviceSettingsError: unknown = null;
   let profilesPromise: Promise<void>;
-  setBusy(true, "コントローラーと共有プロファイルを確認しています…");
+  setBusy(true);
   try {
     setConnection(await backend.scanDevice());
     clearProfile();
@@ -1040,22 +1085,19 @@ async function scan() {
     activeDeviceProfile = null;
     activeProfileState = "known";
     showView("home");
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
     setBusy(false);
     return;
   }
   try {
     await profilesPromise;
     showView("home");
-    setMessage(deviceSession
-      ? "接続を確認しました。プロファイルを選択してください。"
-      : "コントローラー未接続です。保存済みプロファイルは編集できます。");
     if (deviceSettingsError) {
-      setMessage(`デバイス設定を読み込めませんでした: ${errorMessage(deviceSettingsError)}`);
+      showError(`デバイス設定を読み込めませんでした: ${errorMessage(deviceSettingsError)}`);
     }
   } catch (error) {
     showView("home");
-    setMessage(`プロファイル一覧を読み込めませんでした: ${errorMessage(error)}`);
+    showError(`プロファイル一覧を読み込めませんでした: ${errorMessage(error)}`);
   } finally {
     setBusy(false);
   }
@@ -1064,7 +1106,7 @@ async function scan() {
 async function readProfileFromDevice() {
   const session = deviceSession;
   if (!session) return;
-  setBusy(true, "コントローラーのプロファイルを読み取っています…");
+  setBusy(true);
   try {
     const profile = await backend.readProfile(session.device.path);
     setKnownActiveProfile(profile.rawProfile, session);
@@ -1076,9 +1118,8 @@ async function readProfileFromDevice() {
       zkmVersion: session.zkmVersion ? String(session.zkmVersion) : "",
     });
     showView("settings");
-    setMessage("コントローラーから読み込みました。保存するまでConfig.dbもコントローラーも変更していません。");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -1087,26 +1128,24 @@ async function readProfileFromDevice() {
 async function importShareProfile() {
   const shareCode = window.prompt("公式Shareコードを入力してください", "")?.trim();
   if (!shareCode) return;
-  setBusy(true, "公式Shareコードを確認しています…");
+  setBusy(true);
   try {
     setEditingProfile(await backend.importShareProfile(shareCode, deviceSession?.uuid ?? ""));
     showView("settings");
-    setMessage("公式Shareコードからプロファイルを読み込みました。保存するまで共有DBは変更していません。");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
 }
 
 async function createNewProfile() {
-  setBusy(true, "新しいプロファイルを作成しています…");
+  setBusy(true);
   try {
     setEditingProfile(await backend.newProfile());
     showView("settings");
-    setMessage("新しいプロファイルを作成しました。設定後に保存してください。");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -1114,7 +1153,7 @@ async function createNewProfile() {
 
 async function exportShareCode(profile: ProfileDocument) {
   const session = deviceSession;
-  setBusy(true, "公式Shareコードを発行しています…");
+  setBusy(true);
   try {
     const shareCode = await backend.createShareCode({
       name: profile.name || "BIGBIGWON Profile",
@@ -1134,9 +1173,11 @@ async function exportShareCode(profile: ProfileDocument) {
         copied = false;
       }
     }
-    setMessage(`公式Shareコードを発行しました${copied ? "。クリップボードにコピー済み" : ""}。\n${shareCode}`);
+    if (!copied) {
+      showError(`公式Shareコードをクリップボードにコピーできませんでした。\n${shareCode}`);
+    }
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -1148,7 +1189,7 @@ async function shareSavedProfile(id: number) {
     const profile = await backend.loadSavedProfile(id);
     await exportShareCode(profile);
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -1157,7 +1198,7 @@ async function shareSavedProfile(id: number) {
 async function applySavedProfileFromCard(id: number) {
   const session = deviceSession;
   if (busy || !session) return;
-  setBusy(true, "保存済みプロファイルをコントローラーへ適用しています…");
+  setBusy(true);
   try {
     const profile = await backend.loadSavedProfile(id);
     if (!profile.saved || !profile.supported || !profileMatchesDevice(profile, session)) {
@@ -1165,9 +1206,9 @@ async function applySavedProfileFromCard(id: number) {
     }
     await applySavedProfileToDevice(profile, session);
     await refreshProfiles();
-    setMessage("プロファイルをコントローラーへ適用しました。");
+    showSuccess("プロファイルを適用しました。");
   } catch (error) {
-    setMessage(errorMessage(error));
+    showError(errorMessage(error));
   } finally {
     setBusy(false);
   }
@@ -1242,22 +1283,20 @@ function commitResultSummary(result: CommitResult): string {
   ].join(" / ");
 }
 
-function commitResultMessage(result: CommitResult, mode: SaveMode, prefix = ""): string {
-  const headline = result.warnings.length > 0
-    ? "保存処理は完了しましたが、一部の工程に失敗または未実行があります。"
-    : result.profileApplied
-      ? "プロファイルを保存し、コントローラーへ適用しました。"
-      : result.profileSaved
-        ? mode === "apply"
-          ? "プロファイルを保存しました。コントローラーには適用していません。"
-          : "プロファイルを保存しました。"
-        : "保存処理が完了しました。";
+function commitWarningMessage(result: CommitResult, prefix = ""): string {
   return [
     prefix,
-    headline,
+    "保存処理は完了しましたが、一部の工程に失敗または未実行があります。",
     ...result.warnings,
     `保存結果: ${commitResultSummary(result)}`,
   ].filter((line) => line.length > 0).join("\n");
+}
+
+function commitSuccessMessage(result: CommitResult, mode: SaveMode): string {
+  if (mode === "apply" && result.profileApplied) {
+    return "保存してコントローラーへ適用しました。";
+  }
+  return "保存が完了しました。";
 }
 
 async function saveProfileDocument(mode: SaveMode) {
@@ -1270,12 +1309,16 @@ async function saveProfileDocument(mode: SaveMode) {
     name = prompted;
   }
   let committedResult: CommitResult | null = null;
-  setBusy(true, "プロファイルを共有DBへ保存しています…");
+  setBusy(true);
   try {
     committedResult = await backend.commitProfile(buildCommitProfileInput(profile, name, mode));
     applyCommitResult(committedResult);
     if (committedResult.profileSaved || committedResult.profileApplied) await refreshProfiles();
-    setMessage(commitResultMessage(committedResult, mode));
+    if (committedResult.warnings.length > 0) {
+      showError(commitWarningMessage(committedResult));
+    } else {
+      showSuccess(commitSuccessMessage(committedResult, mode));
+    }
   } catch (error) {
     const message = errorMessage(error);
     if (committedResult === null && message.startsWith("PROFILE_CONFLICT:") && profile.id !== null) {
@@ -1293,12 +1336,16 @@ async function saveProfileDocument(mode: SaveMode) {
             copyResult = await backend.commitProfile(copyInput);
             applyCommitResult(copyResult);
             if (copyResult.profileSaved || copyResult.profileApplied) await refreshProfiles();
-            setMessage(commitResultMessage(copyResult, mode, "外部変更を上書きせず、別名で保存しました。"));
+            if (copyResult.warnings.length > 0) {
+              showError(commitWarningMessage(copyResult, "外部変更を上書きせず、別名で保存しました。"));
+            } else {
+              showSuccess("外部変更を上書きせず、別名で保存しました。");
+            }
           } catch (copyError) {
             if (copyResult) {
-              setMessage(`${errorMessage(copyError)}\n保存結果: ${commitResultSummary(copyResult)}`);
+              showError(`${errorMessage(copyError)}\n保存結果: ${commitResultSummary(copyResult)}`);
             } else {
-              setMessage(errorMessage(copyError));
+              showError(errorMessage(copyError));
             }
           }
         }
@@ -1306,9 +1353,9 @@ async function saveProfileDocument(mode: SaveMode) {
     } else {
       if (committedResult) {
         await refreshProfiles().catch(() => undefined);
-        setMessage(`${message}\n保存結果: ${commitResultSummary(committedResult)}`);
+        showError(`${message}\n保存結果: ${commitResultSummary(committedResult)}`);
       } else {
-        setMessage(message);
+        showError(message);
       }
     }
   } finally {
@@ -1317,18 +1364,17 @@ async function saveProfileDocument(mode: SaveMode) {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  setupWindowControls(setMessage);
+  setupWindowControls(showError);
   byId("refresh-device").addEventListener("click", () => void scan());
   byId("new-profile").addEventListener("click", () => void createNewProfile());
   byId("read-device-profile").addEventListener("click", () => void readProfileFromDevice());
   byId("import-profile").addEventListener("click", () => void importShareProfile());
   byId("back-home").addEventListener("click", () => {
     showView("home");
-    void refreshProfiles().catch((error: unknown) => setMessage(errorMessage(error)));
+    void refreshProfiles().catch((error: unknown) => showError(errorMessage(error)));
   });
   byId("save-profile").addEventListener("click", () => void openSaveDialog());
   byId("save-dialog-cancel").addEventListener("click", closeSaveDialog);
-  byId("save-diff-select").addEventListener("change", renderSelectedSaveDiff);
   byId("save-dialog-only").addEventListener("click", () => chooseSaveMode("save"));
   byId("save-dialog-apply").addEventListener("click", () => chooseSaveMode("apply"));
   macroEditor.setup();
@@ -1399,6 +1445,10 @@ window.addEventListener("DOMContentLoaded", () => {
 
 window.addEventListener("focus", () => {
   if (!busy) {
-    void refreshProfiles().catch((error: unknown) => setMessage(errorMessage(error)));
+    void refreshProfiles().catch((error: unknown) => showError(errorMessage(error)));
   }
+});
+
+window.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
 });

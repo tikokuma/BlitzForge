@@ -27,8 +27,8 @@ import type {
 type MacroEditorHost = {
   getDevicePath: () => string | null;
   isBusy: () => boolean;
-  setBusy: (busy: boolean, message?: string) => void;
-  setMessage: (message: string) => void;
+  setBusy: (busy: boolean) => void;
+  showError: (message: string) => void;
   syncHostActions: () => void;
 };
 
@@ -261,7 +261,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   function addStep(): void {
     if (!draftRecord) return;
     if (macroStepCount(draftRecord) >= MACRO_MAX_STEPS) {
-      host.setMessage("マクロは最大64操作です。");
+      host.showError("マクロは最大64操作です。");
       return;
     }
     draftRecord = appendMacroStep(draftRecord);
@@ -322,14 +322,13 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   async function refresh(): Promise<void> {
     const path = host.getDevicePath();
     if (!path) return;
-    host.setBusy(true, "マクロの4枠を読み込んでいます…");
+    host.setBusy(true);
     try {
       renderSummary(await backend.readMacros(path));
-      host.setMessage("マクロ4枠を読み込みました。");
     } catch (error) {
       const message = errorMessage(error);
       byId("macro-output").textContent = message;
-      host.setMessage(message);
+      host.showError(message);
     } finally {
       host.setBusy(false);
     }
@@ -363,7 +362,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       byId("macro-slot-details").textContent = `スロット ${slot}を編集中です。`;
       host.syncHostActions();
     } catch (error) {
-      host.setMessage(errorMessage(error));
+      host.showError(errorMessage(error));
     }
   }
 
