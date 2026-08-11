@@ -56,10 +56,17 @@ pub struct CurveSettingsSummary {
     stabilization: i16,
 }
 
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RectangleAlgorithmSettings {
+    left_stick: bool,
+    right_stick: bool,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllerSettingsSummary {
-    rectangle_algorithm: bool,
+    rectangle_algorithm: RectangleAlgorithmSettings,
     left_stick: CurveSettingsSummary,
     right_stick: CurveSettingsSummary,
     rapid_fire: RapidFireSummary,
@@ -71,7 +78,7 @@ pub struct ControllerSettingsSummary {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllerSettingsInput {
-    rectangle_algorithm: bool,
+    rectangle_algorithm: RectangleAlgorithmSettings,
     left_stick: CurveSettingsInput,
     right_stick: CurveSettingsInput,
     key_bindings: Vec<String>,
@@ -308,7 +315,8 @@ pub fn update_controller_settings(
     }
     protocol::set_controller_settings(
         &mut profile,
-        rectangle_algorithm,
+        rectangle_algorithm.left_stick,
+        rectangle_algorithm.right_stick,
         left_stick.into_curve("left stick")?,
         right_stick.into_curve("right stick")?,
         key_bindings,
@@ -705,7 +713,10 @@ fn read_macro_info_report(device: &HidDevice) -> Result<Vec<u8>, String> {
 fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String> {
     let settings = protocol::controller_settings(profile)?;
     Ok(ControllerSettingsSummary {
-        rectangle_algorithm: settings.rectangle_algorithm,
+        rectangle_algorithm: RectangleAlgorithmSettings {
+            left_stick: settings.left_rectangle_algorithm,
+            right_stick: settings.right_rectangle_algorithm,
+        },
         left_stick: CurveSettingsSummary {
             center: settings.left_curve.center,
             point1_x: settings.left_curve.point1_x,

@@ -8,7 +8,9 @@ pub const V37_LEFT_VIBRATION_MIN_OFFSET: usize = 0x148;
 pub const V37_RIGHT_VIBRATION_MIN_OFFSET: usize = 0x149;
 pub const V37_LEFT_VIBRATION_MAX_OFFSET: usize = 0x14c;
 pub const V37_RIGHT_VIBRATION_MAX_OFFSET: usize = 0x14d;
-pub const V37_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00c;
+pub const V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00c;
+pub const V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00d;
+const V37_RECTANGULAR_ALGORITHM_MASK: u8 = 0x10;
 pub const V37_LEFT_DEFAULT_CURVE_OFFSET: usize = 0x00e;
 pub const V37_RIGHT_DEFAULT_CURVE_OFFSET: usize = 0x03a;
 pub const V37_TURBO_KEY_MASK_OFFSET: usize = 0x140;
@@ -92,7 +94,8 @@ pub struct RapidFireTiming {
 
 #[derive(Clone, Copy)]
 pub struct ControllerSettings {
-    pub rectangle_algorithm: bool,
+    pub left_rectangle_algorithm: bool,
+    pub right_rectangle_algorithm: bool,
     pub left_curve: CurveSettings,
     pub right_curve: CurveSettings,
     pub rapid_fire: RapidFireSettings,
@@ -340,7 +343,12 @@ pub fn controller_settings(profile: &[u8]) -> Result<ControllerSettings, String>
     }
 
     Ok(ControllerSettings {
-        rectangle_algorithm: profile[V37_RECTANGULAR_ALGORITHM_OFFSET] & 0x10 != 0,
+        left_rectangle_algorithm: profile[V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET]
+            & V37_RECTANGULAR_ALGORITHM_MASK
+            != 0,
+        right_rectangle_algorithm: profile[V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET]
+            & V37_RECTANGULAR_ALGORITHM_MASK
+            != 0,
         left_curve: read_curve(profile, V37_LEFT_DEFAULT_CURVE_OFFSET, "left")?,
         right_curve: read_curve(profile, V37_RIGHT_DEFAULT_CURVE_OFFSET, "right")?,
         rapid_fire: rapid_fire_settings(profile)?,
@@ -386,7 +394,8 @@ pub fn rapid_fire_timing(index: u8) -> Option<RapidFireTiming> {
 
 pub fn set_controller_settings(
     profile: &mut [u8],
-    rectangle_algorithm: bool,
+    left_rectangle_algorithm: bool,
+    right_rectangle_algorithm: bool,
     left_curve: CurveSettings,
     right_curve: CurveSettings,
     key_bindings: [[u8; V37_KEYMAP_ENTRY_LENGTH]; V37_KEYMAP_ENTRY_COUNT],
@@ -395,10 +404,21 @@ pub fn set_controller_settings(
     if profile.len() != V37_PROFILE_LENGTH {
         return Err("expected a 484-byte v37 profile".into());
     }
-    if rectangle_algorithm {
-        profile[V37_RECTANGULAR_ALGORITHM_OFFSET] |= 0x10;
-    } else {
-        profile[V37_RECTANGULAR_ALGORITHM_OFFSET] &= !0x10;
+    for (offset, enabled) in [
+        (
+            V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET,
+            left_rectangle_algorithm,
+        ),
+        (
+            V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET,
+            right_rectangle_algorithm,
+        ),
+    ] {
+        if enabled {
+            profile[offset] |= V37_RECTANGULAR_ALGORITHM_MASK;
+        } else {
+            profile[offset] &= !V37_RECTANGULAR_ALGORITHM_MASK;
+        }
     }
 
     write_curve(profile, V37_LEFT_DEFAULT_CURVE_OFFSET, left_curve, "left")?;
@@ -941,6 +961,8 @@ mod tests {
         assert_eq!(&profile[0x14c..0x151], &[0xff, 0xff, 0xff, 0xff, 0x33]);
 
         let settings = controller_settings(&profile).unwrap();
+        assert!(!settings.left_rectangle_algorithm);
+        assert!(!settings.right_rectangle_algorithm);
         assert_eq!(settings.left_curve.center, 12);
         assert_eq!(settings.left_curve.point1_x, 30);
         assert_eq!(settings.left_curve.point2_x, 70);
@@ -1157,7 +1179,8 @@ mod tests {
     #[test]
     fn reads_and_updates_known_controller_settings() {
         let mut profile = profile();
-        profile[V37_RECTANGULAR_ALGORITHM_OFFSET] = 0;
+        profile[V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET] = 0x80;
+        profile[V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET] = 0x40 | V37_RECTANGULAR_ALGORITHM_MASK;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET] = 1;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 1] = 0x20;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 8] = 0x61;
@@ -1168,6 +1191,7 @@ mod tests {
         set_controller_settings(
             &mut profile,
             true,
+            false,
             CurveSettings {
                 center: -13,
                 point1_x: 40,
@@ -1195,7 +1219,10 @@ mod tests {
         .unwrap();
 
         let settings = controller_settings(&profile).unwrap();
-        assert!(settings.rectangle_algorithm);
+        assert!(settings.left_rectangle_algorithm);
+        assert!(!settings.right_rectangle_algorithm);
+        assert_eq!(profile[V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET], 0x90);
+        assert_eq!(profile[V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET], 0x40);
         assert_eq!(settings.left_curve.center, -13);
         assert_eq!(settings.left_curve.point1_x, 40);
         assert_eq!(settings.left_curve.point1_y, 29);
@@ -1231,6 +1258,7 @@ mod tests {
 
         set_controller_settings(
             &mut profile,
+            false,
             false,
             CurveSettings {
                 center: 1,
@@ -1272,6 +1300,7 @@ mod tests {
 
         set_controller_settings(
             &mut profile,
+            false,
             false,
             CurveSettings {
                 center: 0,
@@ -1320,6 +1349,7 @@ mod tests {
 
         set_controller_settings(
             &mut profile,
+            false,
             false,
             CurveSettings {
                 center: 0,

@@ -56,8 +56,13 @@ export type RapidFireSettings = {
   timing?: { periodMs: number; halfPeriodMs: number; hz: number } | null;
 };
 
+export type RectangleAlgorithmSettings = {
+  leftStick: boolean;
+  rightStick: boolean;
+};
+
 export type ControllerSettings = {
-  rectangleAlgorithm: boolean;
+  rectangleAlgorithm: RectangleAlgorithmSettings;
   leftStick: CurveSettings;
   rightStick: CurveSettings;
   rapidFire: RapidFireSettings;
@@ -119,7 +124,7 @@ export type ApplyProfileResult = {
 };
 
 export type ControllerSettingsInput = {
-  rectangleAlgorithm: boolean;
+  rectangleAlgorithm: RectangleAlgorithmSettings;
   leftStick: CurveSettings;
   rightStick: CurveSettings;
   rapidFire: {

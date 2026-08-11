@@ -28,6 +28,7 @@ import type {
   ProfileDocument,
   ProfileListEntry,
   ProfileSummary,
+  RectangleAlgorithmSettings,
   StepAccuracySettings,
   Stick,
   VibrationMode,
@@ -94,6 +95,10 @@ let selectedStick: Stick = "leftStick";
 let curveDrafts: Record<Stick, CurveSettings> = {
   leftStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
   rightStick: { center: 0, point1X: 0, point1Y: 0, point2X: 0, point2Y: 0, edge: 0, stabilization: 0 },
+};
+let rectangleAlgorithmDraft: RectangleAlgorithmSettings = {
+  leftStick: false,
+  rightStick: false,
 };
 
 function setMessage(message: string) {
@@ -474,6 +479,10 @@ function syncActiveCurveDraft() {
   curveDrafts[selectedStick] = constrainCurve(readActiveCurve());
 }
 
+function syncActiveRectangleAlgorithm() {
+  rectangleAlgorithmDraft[selectedStick] = byId<HTMLInputElement>("rectangle-algorithm").checked;
+}
+
 function setActiveCurve(curve: CurveSettings, changed?: CurveChange) {
   const safeCurve = constrainCurve(curve, changed);
   setRangeControl("curve-center", safeCurve.center);
@@ -489,9 +498,11 @@ function setActiveCurve(curve: CurveSettings, changed?: CurveChange) {
 function selectStick(stick: Stick) {
   if (stick !== selectedStick) {
     syncActiveCurveDraft();
+    syncActiveRectangleAlgorithm();
   }
   selectedStick = stick;
   setActiveCurve(curveDrafts[stick]);
+  byId<HTMLInputElement>("rectangle-algorithm").checked = rectangleAlgorithmDraft[stick];
   const left = stick === "leftStick";
   byId("stick-left-tab").classList.toggle("active", left);
   byId("stick-right-tab").classList.toggle("active", !left);
@@ -502,10 +513,11 @@ function selectStick(stick: Stick) {
 
 function readSettingsInput(): ControllerSettingsInput {
   syncActiveCurveDraft();
+  syncActiveRectangleAlgorithm();
   curveDrafts.leftStick = constrainCurve(curveDrafts.leftStick);
   curveDrafts.rightStick = constrainCurve(curveDrafts.rightStick);
   return {
-    rectangleAlgorithm: byId<HTMLInputElement>("rectangle-algorithm").checked,
+    rectangleAlgorithm: { ...rectangleAlgorithmDraft },
     leftStick: { ...curveDrafts.leftStick },
     rightStick: { ...curveDrafts.rightStick },
     ...keymapEditor.readSettings(),
@@ -513,7 +525,8 @@ function readSettingsInput(): ControllerSettingsInput {
 }
 
 function settingsEqual(settings: ControllerSettings, input: ControllerSettingsInput): boolean {
-  return settings.rectangleAlgorithm === input.rectangleAlgorithm
+  return settings.rectangleAlgorithm.leftStick === input.rectangleAlgorithm.leftStick
+    && settings.rectangleAlgorithm.rightStick === input.rectangleAlgorithm.rightStick
     && curvesEqual(settings.leftStick, input.leftStick)
     && curvesEqual(settings.rightStick, input.rightStick)
     && settings.rapidFire.keys.length === input.rapidFire.keys.length
@@ -611,6 +624,7 @@ function setupDraggablePoint(id: string, point: CurvePoint) {
 }
 
 function renderControllerSettings(profile: ProfileSummary) {
+  const activeStick = selectedStick;
   const settings = profile.settings;
   curveDrafts = {
     leftStick: constrainCurve(settings.leftStick),
@@ -622,10 +636,9 @@ function renderControllerSettings(profile: ProfileSummary) {
     timing: settings.rapidFireTiming,
   };
   keymapEditor.render(settings.keyBindings, rapidFire);
-  selectedStick = "leftStick";
-  byId<HTMLInputElement>("rectangle-algorithm").checked = settings.rectangleAlgorithm;
-  setActiveCurve(curveDrafts.leftStick);
-  selectStick("leftStick");
+  rectangleAlgorithmDraft = { ...settings.rectangleAlgorithm };
+  selectedStick = activeStick;
+  selectStick(activeStick);
   settingsDirty = false;
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
