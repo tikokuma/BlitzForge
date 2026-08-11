@@ -50,11 +50,6 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
       speed.append(option);
     }
     speed.value = speedIndex === null ? "unknown" : String(speedIndex);
-    byId("rapid-timing").textContent = speedIndex === null
-      ? "不明"
-      : rapidFireDraft.timing
-        ? `${rapidFireDraft.timing.hz}回/秒`
-        : "現在の設定";
   }
 
   function toggleRapidFire(slot: number): void {

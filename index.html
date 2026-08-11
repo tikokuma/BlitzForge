@@ -188,6 +188,19 @@
             <p>割り当てをクリックして変更します。</p>
             <span id="keymap-summary" class="status-pill">32スロット</span>
           </div>
+          <section class="stick-control-group">
+            <div class="group-heading">
+              <h3>連射速度</h3>
+            </div>
+            <div class="range-field">
+              <select id="rapid-speed" aria-label="連射速度">
+                <option value="unknown">不明</option>
+                <option value="0">遅い（5回/秒）</option>
+                <option value="1">標準（10回/秒）</option>
+                <option value="2">速い（20回/秒）</option>
+              </select>
+            </div>
+          </section>
           <div id="keymap-grid" class="keymap-grid"></div>
         </section>
 
@@ -201,22 +214,6 @@
           </div>
 
           <div class="settings-grid">
-            <section class="stick-control-group">
-              <div class="group-heading">
-                <h3>連射</h3>
-                <p>対象ボタンはキーバインド一覧の各行にある「連射」から切り替えます。</p>
-              </div>
-              <div class="range-field">
-                <div class="range-label"><label for="rapid-speed">速度</label><output id="rapid-timing">—</output></div>
-                <select id="rapid-speed">
-                  <option value="unknown">不明</option>
-                  <option value="0">遅い（5回/秒）</option>
-                  <option value="1">標準（10回/秒）</option>
-                  <option value="2">速い（20回/秒）</option>
-                </select>
-              </div>
-            </section>
-
             <section class="stick-control-group">
               <div class="group-heading">
                 <h3>マクロスロット</h3>

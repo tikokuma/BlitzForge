@@ -636,7 +636,6 @@ function renderControllerSettings(profile: ProfileSummary) {
   const rapidFire = {
     ...settings.rapidFire,
     speedIndex: settings.rapidFireSpeedIndex,
-    timing: settings.rapidFireTiming,
   };
   keymapEditor.render(settings.keyBindings, rapidFire);
   rectangleAlgorithmDraft = { ...settings.rectangleAlgorithm };

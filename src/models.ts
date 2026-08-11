@@ -55,7 +55,6 @@ export type CurveSettings = {
 export type RapidFireSettings = {
   keys: Array<boolean | null>;
   speedIndex: number | null;
-  timing?: { periodMs: number; halfPeriodMs: number; hz: number } | null;
 };
 
 export type RectangleAlgorithmSettings = {
@@ -69,7 +68,6 @@ export type ControllerSettings = {
   rightStick: CurveSettings;
   rapidFire: RapidFireSettings;
   rapidFireSpeedIndex: number | null;
-  rapidFireTiming: { periodMs: number; halfPeriodMs: number; hz: number } | null;
   keyBindings: string[];
 };
 
