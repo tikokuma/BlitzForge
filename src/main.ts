@@ -11,13 +11,10 @@ import {
   curveYBounds,
 } from "./domain/curve";
 import type { CurveChange } from "./domain/curve";
-import {
-  KEYMAP_DEFAULT_ENTRY,
-  KEYMAP_VISIBLE_SOURCES,
-} from "./domain/keymap";
 import { deviceUuidsEqual } from "./domain/profile";
 import { createKeymapEditor } from "./features/keymap-editor";
 import { createMacroEditor } from "./features/macro-editor";
+import { createInputDiagnostics } from "./features/input-diagnostics";
 import type {
   ActiveProfileState,
   CommitProfileInput,
@@ -151,7 +148,7 @@ function setBusy(value: boolean) {
 
 function syncActions() {
   const macroDirty = macroEditor.isDirty();
-  for (const id of ["home-view", "settings-view"] as const) {
+  for (const id of ["home-view", "settings-view", "diagnostics-view"] as const) {
     const view = byId(id);
     view.inert = busy;
     view.setAttribute("aria-busy", String(busy));
@@ -175,33 +172,29 @@ const macroEditor = createMacroEditor({
 
 const keymapEditor = createKeymapEditor({ markDirty: markSettingsDirty });
 
-function renderDetails(id: string, rows: Array<[string, string]>) {
-  const details = byId(id);
-  details.replaceChildren();
-  for (const [label, value] of rows) {
-    const term = document.createElement("dt");
-    term.textContent = label;
-    const description = document.createElement("dd");
-    description.textContent = value;
-    details.append(term, description);
-  }
-}
+const inputDiagnostics = createInputDiagnostics({
+  getDeviceName: () => deviceSession?.device.product ?? null,
+  getStickSettings: (stick) => {
+    const settings = readSettingsInput();
+    return {
+      curve: settings[stick],
+      circularAlgorithm: settings.rectangleAlgorithm[stick],
+    };
+  },
+  measurePollingRate: async () => {
+    const devicePath = deviceSession?.device.path;
+    if (!devicePath) throw new Error("コントローラーが接続されていません");
+    return backend.measurePollingRate(devicePath);
+  },
+});
 
 function renderDevice(session: DeviceSession | null) {
   const name = byId("device-name");
   if (!session) {
     name.textContent = "接続を確認しています";
-    renderDetails("device-details", []);
     return;
   }
   name.textContent = session.device.product;
-  renderDetails("device-details", [
-    ["Device", session.device.vendorProduct],
-    ["Usage", session.device.usage],
-    ["Path", session.device.path],
-    ["UUID", session.uuid || "不明"],
-    ["ZKM", session.zkmVersion ? `0x${session.zkmVersion.toString(16).toUpperCase()}` : "不明"],
-  ]);
 }
 
 function setConnection(session: DeviceSession | null) {
@@ -216,7 +209,6 @@ function clearProfile() {
   deviceSettingsDirty = false;
   currentDeviceSettings = null;
   byId("settings-profile-name").textContent = "";
-  renderDetails("profile-details", []);
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
   byId("device-dirty").hidden = true;
@@ -226,26 +218,6 @@ function clearProfile() {
 
 function renderProfile(profile: ProfileDocument) {
   byId("settings-profile-name").textContent = profile.name;
-  const rapid = profile.settings.rapidFire;
-  const rapidButtons = KEYMAP_VISIBLE_SOURCES
-    .filter(({ slot }) => rapid.keys[slot] === true)
-    .map(({ label }) => label);
-  const rapidState = rapidButtons.length === 0 ? "なし" : `${rapidButtons.join(" / ")} 有効`;
-  const timing = profile.settings.rapidFireTiming
-    ? `${profile.settings.rapidFireTiming.hz}回/秒`
-    : profile.settings.rapidFireSpeedIndex === null ? "不明" : "設定済み";
-  const changedKeymaps = profile.settings.keyBindings
-    .filter((entry) => entry.toUpperCase() !== KEYMAP_DEFAULT_ENTRY)
-    .length;
-  const curveSummary = (curve: CurveSettings) =>
-    `センター ${curve.center} / エッジ ${curve.edge} / 安定化 ${curve.stabilization}`;
-  renderDetails("profile-details", [
-    ["振動", `左 ${profile.vibration.left.min}–${profile.vibration.left.max} / 右 ${profile.vibration.right.min}–${profile.vibration.right.max}`],
-    ["左スティック", curveSummary(profile.settings.leftStick)],
-    ["右スティック", curveSummary(profile.settings.rightStick)],
-    ["キーバインド", changedKeymaps === 0 ? "標準" : `${changedKeymaps}件変更`],
-    ["連射", `${rapidState} / ${timing}`],
-  ]);
 }
 
 function setRangeControl(id: string, value: number) {
@@ -702,14 +674,24 @@ function markVibrationDirty() {
   syncActions();
 }
 
-function showView(view: "home" | "settings") {
+function showView(view: "home" | "settings" | "diagnostics") {
+  const homeVisible = view === "home";
   const settingsVisible = view === "settings";
-  byId("home-view").hidden = settingsVisible;
+  const diagnosticsVisible = view === "diagnostics";
+  byId("home-view").hidden = !homeVisible;
   byId("settings-view").hidden = !settingsVisible;
+  byId("diagnostics-view").hidden = !diagnosticsVisible;
+  byId("main-tabs").hidden = settingsVisible;
+  byId("main-tab-home").classList.toggle("active", homeVisible);
+  byId("main-tab-diagnostics").classList.toggle("active", diagnosticsVisible);
+  byId("main-tab-home").setAttribute("aria-selected", String(homeVisible));
+  byId("main-tab-diagnostics").setAttribute("aria-selected", String(diagnosticsVisible));
   clearNotification();
   if (settingsVisible && editingProfile) {
     selectSettingsTab("stick");
   }
+  if (diagnosticsVisible) inputDiagnostics.show();
+  else inputDiagnostics.hide();
 }
 
 function selectSettingsTab(tab: "stick" | "keymap" | "device" | "vibration" | "macro") {
@@ -1416,6 +1398,9 @@ async function saveProfileDocument(mode: SaveMode) {
 
 window.addEventListener("DOMContentLoaded", () => {
   setupWindowControls(showError);
+  byId("main-tab-home").addEventListener("click", () => showView("home"));
+  byId("main-tab-diagnostics").addEventListener("click", () => showView("diagnostics"));
+  byId("diagnostics-back-home").addEventListener("click", () => showView("home"));
   byId("refresh-device").addEventListener("click", () => void scan());
   byId("new-profile").addEventListener("click", () => void createNewProfile());
   byId("read-device-profile").addEventListener("click", () => void readProfileFromDevice());
@@ -1455,6 +1440,7 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("tab-vibration").addEventListener("click", () => selectSettingsTab("vibration"));
   byId("tab-macro").addEventListener("click", () => selectSettingsTab("macro"));
   keymapEditor.setup();
+  inputDiagnostics.setup();
   byId("stick-left-tab").addEventListener("click", () => selectStick("leftStick"));
   byId("stick-right-tab").addEventListener("click", () => selectStick("rightStick"));
   byId("rectangle-algorithm").addEventListener("change", markSettingsDirty);

@@ -11,6 +11,7 @@ import type {
   ProfileDocument,
   ProfileListEntry,
   ProfileSnapshot,
+  PollingMeasurement,
   SaveProfileInput,
 } from "./models";
 
@@ -49,5 +50,7 @@ export const backend = {
     invoke("apply_profile", { profile, devicePath }),
   readDeviceSettings: (devicePath: string): Promise<DeviceSettings> =>
     invoke("read_device_settings", { devicePath }),
+  measurePollingRate: (devicePath: string, durationMs = 250): Promise<PollingMeasurement> =>
+    invoke("measure_polling_rate", { devicePath, durationMs }),
   readMacros: (devicePath: string): Promise<MacroSummary> => invoke("read_macros", { devicePath }),
 };

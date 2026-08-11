@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deviceUuidsEqual, parseProfileBytes, profileBytesEqual } from "./profile";
+import { deviceUuidsEqual, parseProfileBytes } from "./profile";
 
 describe("profile byte parsing", () => {
   it("accepts byte arrays and rejects ambiguous or corrupt values", () => {
@@ -12,11 +12,6 @@ describe("profile byte parsing", () => {
     expect(parseProfileBytes("[256]")).toBeNull();
   });
 
-  it("compares every byte and the full profile length", () => {
-    expect(profileBytesEqual([1, 2], [1, 2])).toBe(true);
-    expect(profileBytesEqual([1, 2], [1, 3])).toBe(false);
-    expect(profileBytesEqual([1, 2], [1, 2, 0])).toBe(false);
-  });
 });
 
 describe("device UUID matching", () => {

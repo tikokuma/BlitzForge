@@ -714,6 +714,20 @@ async fn read_device_settings(
 }
 
 #[tauri::command]
+async fn measure_polling_rate(
+    state: tauri::State<'_, AppState>,
+    device_path: String,
+    duration_ms: u64,
+) -> Result<device::PollingMeasurement, String> {
+    run_locked(
+        state.hid_transaction.clone(),
+        "HID transaction",
+        move |_| device::measure_polling_rate(&device_path, duration_ms),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn read_macros(
     state: tauri::State<'_, AppState>,
     device_path: String,
@@ -744,6 +758,7 @@ pub fn run() {
             new_profile,
             apply_profile,
             read_device_settings,
+            measure_polling_rate,
             read_macros
         ])
         .run(tauri::generate_context!())

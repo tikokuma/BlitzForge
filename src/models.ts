@@ -228,6 +228,16 @@ export type DeviceSettings = {
   stepAccuracy: StepAccuracySettings;
 };
 
+export type PollingMeasurement = {
+  pollingRate: number;
+  averagePollingRate: number;
+  reportInterval: number;
+  minInterval: number;
+  maxInterval: number;
+  intervalJitter: number;
+  intervals: number[];
+};
+
 export type DeviceSettingsWriteResult = {
   device: DeviceSummary;
   settings: DeviceSettings;

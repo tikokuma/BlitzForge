@@ -1,5 +1,6 @@
 use hidapi::{HidApi, HidDevice};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 use crate::protocol;
 
@@ -7,6 +8,9 @@ const PROFILE_READ_TIMEOUT_MS: i32 = 5_000;
 const PROFILE_SIZE_TIMEOUT_MS: i32 = 500;
 const SHORT_COMMAND_TIMEOUT_MS: i32 = 1_000;
 const ACK_TIMEOUT_MS: i32 = 2_000;
+const POLLING_MEASUREMENT_TIMEOUT_MS: i32 = 50;
+const POLLING_MEASUREMENT_MIN_MS: u64 = 100;
+const POLLING_MEASUREMENT_MAX_MS: u64 = 1_000;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,6 +197,18 @@ pub struct DeviceSettingsWriteResult {
     settings: DeviceSettingsSummary,
     polling_command: String,
     step_accuracy_command: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PollingMeasurement {
+    pub polling_rate: f64,
+    pub average_polling_rate: f64,
+    pub report_interval: f64,
+    pub min_interval: f64,
+    pub max_interval: f64,
+    pub interval_jitter: f64,
+    pub intervals: Vec<f64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -877,6 +893,69 @@ pub fn set_device_settings(
         settings: readback,
         polling_command: spaced_hex(protocol::wire_bytes(&polling_report)),
         step_accuracy_command: spaced_hex(protocol::wire_bytes(&step_accuracy_report)),
+    })
+}
+
+pub fn measure_polling_rate(
+    expected_config_path: &str,
+    duration_ms: u64,
+) -> Result<PollingMeasurement, String> {
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let config_info = find_config_info_at_path(&api, expected_config_path)?;
+    let input_info = find_gamepad_info(&api, config_info)?;
+    let device = api
+        .open_path(input_info.path())
+        .map_err(|error| format!("gamepad input interface could not be opened: {error}"))?;
+    let duration = Duration::from_millis(
+        duration_ms.clamp(POLLING_MEASUREMENT_MIN_MS, POLLING_MEASUREMENT_MAX_MS),
+    );
+    let deadline = Instant::now() + duration;
+    let mut intervals = Vec::new();
+    let mut previous_report_at = None;
+    let mut report = [0_u8; 512];
+
+    while Instant::now() < deadline {
+        let read = device
+            .read_timeout(&mut report, POLLING_MEASUREMENT_TIMEOUT_MS)
+            .map_err(|error| format!("gamepad input report read failed: {error}"))?;
+        if read == 0 {
+            continue;
+        }
+        let received_at = Instant::now();
+        if let Some(previous) = previous_report_at {
+            let interval = received_at.duration_since(previous).as_secs_f64() * 1_000.0;
+            if interval > 0.0 {
+                intervals.push(interval);
+            }
+        }
+        previous_report_at = Some(received_at);
+    }
+
+    if intervals.is_empty() {
+        return Err("ゲームパッド入力レポートを受信できませんでした".into());
+    }
+    let average_interval = intervals.iter().sum::<f64>() / intervals.len() as f64;
+    let mut sorted_intervals = intervals.clone();
+    sorted_intervals.sort_by(f64::total_cmp);
+    let middle = sorted_intervals.len() / 2;
+    let typical_interval = if sorted_intervals.len() % 2 == 0 {
+        (sorted_intervals[middle - 1] + sorted_intervals[middle]) / 2.0
+    } else {
+        sorted_intervals[middle]
+    };
+    let variance = intervals
+        .iter()
+        .map(|interval| (interval - average_interval).powi(2))
+        .sum::<f64>()
+        / intervals.len() as f64;
+    Ok(PollingMeasurement {
+        polling_rate: 1_000.0 / typical_interval,
+        average_polling_rate: 1_000.0 / average_interval,
+        report_interval: typical_interval,
+        min_interval: intervals.iter().copied().fold(f64::INFINITY, f64::min),
+        max_interval: intervals.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        interval_jitter: variance.sqrt(),
+        intervals,
     })
 }
 
@@ -1597,6 +1676,46 @@ fn find_config_info_at_path<'a>(
         })
 }
 
+fn find_gamepad_info<'a>(
+    api: &'a HidApi,
+    config_info: &hidapi::DeviceInfo,
+) -> Result<&'a hidapi::DeviceInfo, String> {
+    let matching = api
+        .device_list()
+        .find(|info| is_gamepad_info(info) && same_physical_device(config_info, info));
+    matching.ok_or_else(|| "ゲームパッド入力インターフェースが見つかりません".into())
+}
+
+fn is_gamepad_info(info: &hidapi::DeviceInfo) -> bool {
+    info.vendor_id() == protocol::VENDOR_ID
+        && info.product_id() == protocol::PRODUCT_ID
+        && info.usage_page() == 0x0001
+        && matches!(info.usage(), 0x0004 | 0x0005)
+}
+
+fn same_physical_device(left: &hidapi::DeviceInfo, right: &hidapi::DeviceInfo) -> bool {
+    match (left.serial_number(), right.serial_number()) {
+        (Some(left), Some(right)) if !left.is_empty() && !right.is_empty() => left == right,
+        _ => device_instance_key(left) == device_instance_key(right),
+    }
+}
+
+fn device_instance_key(info: &hidapi::DeviceInfo) -> String {
+    let mut path = info
+        .path()
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .to_string();
+    if let Some(index) = ["&mi_", "&ig_", "&col"]
+        .iter()
+        .filter_map(|marker| path.find(marker))
+        .min()
+    {
+        path.truncate(index);
+    }
+    path
+}
+
 fn is_config_info(info: &hidapi::DeviceInfo) -> bool {
     info.vendor_id() == protocol::VENDOR_ID
         && info.product_id() == protocol::PRODUCT_ID
@@ -1608,7 +1727,11 @@ fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {
     DeviceSummary {
         vendor_product: format!("VID_{:04X} PID_{:04X}", info.vendor_id(), info.product_id()),
         usage: format!("0x{:04X}:0x{:04X}", info.usage_page(), info.usage()),
-        product: info.product_string().unwrap_or("Controller").to_string(),
+        product: if is_config_info(info) {
+            "BIGBIG WON Blitz2".to_string()
+        } else {
+            info.product_string().unwrap_or("Controller").to_string()
+        },
         path: info.path().to_string_lossy().into_owned(),
     }
 }

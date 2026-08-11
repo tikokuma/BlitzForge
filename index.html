@@ -26,17 +26,19 @@
       </div>
     </header>
     <main class="app-shell">
+      <nav id="main-tabs" class="main-tabs" aria-label="メイン画面">
+        <button id="main-tab-home" class="tab active" type="button" aria-selected="true">概要</button>
+        <button id="main-tab-diagnostics" class="tab" type="button" aria-selected="false">入力診断</button>
+      </nav>
       <div id="home-view" class="view">
         <section class="panel device-panel">
           <div class="panel-heading">
             <div>
               <p class="section-kicker">DEVICE</p>
-              <h2>コントローラー</h2>
-              <p id="device-name">接続を確認しています</p>
+              <h2 id="device-name">接続を確認しています</h2>
             </div>
             <button id="refresh-device" type="button">再検索</button>
           </div>
-          <dl id="device-details" class="details"></dl>
         </section>
 
         <section class="panel profile-panel">
@@ -54,7 +56,6 @@
             </div>
           </div>
           <div id="profile-library" class="profile-library"></div>
-          <dl id="profile-details" class="details"></dl>
         </section>
       </div>
 
@@ -355,6 +356,73 @@
               </div>
             </div>
           </div>
+        </section>
+      </div>
+
+      <div id="diagnostics-view" class="view" hidden>
+        <div class="settings-toolbar">
+          <button id="diagnostics-back-home" class="back-button" type="button">← 概要へ戻る</button>
+          <strong>入力診断</strong>
+        </div>
+
+        <nav class="diagnostics-tabs" role="tablist" aria-label="入力診断カテゴリ">
+          <button id="diagnostics-tab-viewer" class="tab active" type="button" role="tab" aria-selected="true">Input Viewer</button>
+          <button id="diagnostics-tab-polling" class="tab" type="button" role="tab" aria-selected="false">Polling Monitor</button>
+        </nav>
+
+        <section id="diagnostics-viewer-section" class="panel diagnostics-section" role="tabpanel">
+          <div class="section-heading diagnostics-heading">
+            <div>
+              <p class="section-kicker">INPUT VIEWER</p>
+              <h2>入力状態</h2>
+            </div>
+          </div>
+
+          <div class="diagnostics-stick-grid">
+            <article class="diagnostics-card">
+              <div class="diagnostics-card-heading">
+                <div><p class="section-kicker">LEFT STICK</p><h3>左スティック</h3></div>
+                <span class="diagnostics-legend"><i class="legend-dot legend-raw"></i>Raw <i class="legend-dot legend-processed"></i>Processed</span>
+              </div>
+              <canvas id="diagnostics-left-stick-canvas" class="diagnostics-stick-canvas" aria-label="左スティック現在位置"></canvas>
+              <div class="diagnostics-axis-grid">
+                <div><span>Raw X</span><strong id="diagnostics-left-stick-raw-x">—</strong></div>
+                <div><span>Raw Y</span><strong id="diagnostics-left-stick-raw-y">—</strong></div>
+              </div>
+            </article>
+            <article class="diagnostics-card">
+              <div class="diagnostics-card-heading">
+                <div><p class="section-kicker">RIGHT STICK</p><h3>右スティック</h3></div>
+                <span class="diagnostics-legend"><i class="legend-dot legend-raw"></i>Raw <i class="legend-dot legend-processed"></i>Processed</span>
+              </div>
+              <canvas id="diagnostics-right-stick-canvas" class="diagnostics-stick-canvas" aria-label="右スティック現在位置"></canvas>
+              <div class="diagnostics-axis-grid">
+                <div><span>Raw X</span><strong id="diagnostics-right-stick-raw-x">—</strong></div>
+                <div><span>Raw Y</span><strong id="diagnostics-right-stick-raw-y">—</strong></div>
+              </div>
+            </article>
+          </div>
+
+          <article class="diagnostics-card diagnostics-buttons-card">
+            <div class="diagnostics-card-heading"><div><p class="section-kicker">BUTTONS</p><h3>ボタン状態</h3></div></div>
+            <div id="diagnostics-buttons" class="diagnostics-button-grid"></div>
+          </article>
+        </section>
+
+        <section id="diagnostics-polling-section" class="panel diagnostics-section" role="tabpanel" hidden>
+          <div class="section-heading diagnostics-heading">
+            <div><p class="section-kicker">POLLING MONITOR</p><h2>ポーリングレート</h2></div>
+            <div class="button-row"><span id="diagnostics-polling-status" class="status-pill">Polling Monitorを開くと測定を開始します</span></div>
+          </div>
+          <div class="diagnostics-metric-grid diagnostics-polling-metrics">
+            <div class="diagnostics-metric"><span>ポーリングレート</span><strong id="diagnostics-polling-rate">—</strong></div>
+            <div class="diagnostics-metric"><span>平均ポーリングレート</span><strong id="diagnostics-polling-average">—</strong></div>
+            <div class="diagnostics-metric"><span>入力間隔</span><strong id="diagnostics-polling-interval">—</strong></div>
+            <div class="diagnostics-metric"><span>最小入力間隔</span><strong id="diagnostics-polling-min">—</strong></div>
+            <div class="diagnostics-metric"><span>最大入力間隔</span><strong id="diagnostics-polling-max">—</strong></div>
+            <div class="diagnostics-metric"><span>入力間隔の揺れ</span><strong id="diagnostics-polling-jitter">—</strong></div>
+          </div>
+          <canvas id="diagnostics-polling-chart" class="diagnostics-polling-chart" aria-label="入力サンプル間隔の推移"></canvas>
         </section>
       </div>
 
