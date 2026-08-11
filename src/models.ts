@@ -13,6 +13,7 @@ export type DeviceSession = {
 
 export type ProfileSnapshot = {
   id: number;
+  phoneUuid: string;
   name: string;
   deviceUuid: string;
   deviceName: string;
@@ -95,6 +96,7 @@ export type ProfileSummary = {
 
 export type ProfileDocument = ProfileSummary & {
   id: number | null;
+  phoneUuid: string;
   name: string;
   deviceUuid: string;
   deviceName: string;
@@ -109,6 +111,7 @@ export type ProfileDocument = ProfileSummary & {
 
 export type SaveProfileInput = {
   id: number | null;
+  phoneUuid: string;
   name: string;
   rawProfile: number[];
   deviceUuid: string;

@@ -836,81 +836,45 @@ pub fn set_device_settings(
     input: DeviceSettingsInput,
 ) -> Result<DeviceSettingsWriteResult, String> {
     validate_device_settings(&input)?;
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device_summary = summary(info);
-    let device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
+    let device_summary = {
+        let api = HidApi::new().map_err(|error| error.to_string())?;
+        let info = find_config_info_at_path(&api, expected_device_path)?;
+        summary(info)
+    };
     let step_accuracy = protocol::StepAccuracySettings {
         mode: input.step_accuracy.mode,
         value: input.step_accuracy.value,
         extension: input.step_accuracy.extension,
     };
     let polling_report = protocol::build_set_polling_rate_report(input.polling_rate);
-    write_report(&device, &polling_report).map_err(|error| {
+    send_device_setting(expected_device_path, &polling_report).map_err(|error| {
         format!("F6 polling-rate write failed; F7 step-accuracy was not attempted: {error}")
     })?;
-    let polling_response = transact_short(
-        &device,
-        &protocol::get_polling_rate_report(),
-        0xf6,
-    )
-    .map_err(|error| {
-        format!(
-            "F6 polling-rate write was sent but readback failed; F7 step-accuracy was not attempted: {error}"
-        )
+    let step_accuracy_report = protocol::build_set_step_accuracy_report(step_accuracy);
+    send_device_setting(expected_device_path, &step_accuracy_report).map_err(|error| {
+        format!("F6 polling-rate write was sent, but F7 step-accuracy write failed: {error}")
     })?;
-    let polling_rate = protocol::decode_polling_rate(&polling_response)
-    .map_err(|error| {
-        format!(
-            "F6 polling-rate write was sent but readback failed; F7 step-accuracy was not attempted: {error}"
-        )
-    })?;
-    if polling_rate != input.polling_rate {
+    let readback = read_device_settings(expected_device_path)
+        .map_err(|error| format!("F6/F7 settings were written, but readback failed: {error}"))?;
+    if readback.polling_rate != input.polling_rate {
         return Err(format!(
-            "F6 polling-rate readback mismatch: requested {}, received {}; F7 step-accuracy was not attempted",
-            input.polling_rate, polling_rate
+            "F6 polling-rate readback mismatch: requested {}, received {}",
+            input.polling_rate, readback.polling_rate
         ));
     }
-
-    let step_accuracy_report = protocol::build_set_step_accuracy_report(step_accuracy);
-    write_report(&device, &step_accuracy_report).map_err(|error| {
-        format!(
-            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy write failed: {error}"
-        )
-    })?;
-    let step_accuracy_response = transact_short(
-        &device,
-        &protocol::get_step_accuracy_report(),
-        0xf7,
-    )
-    .map_err(|error| {
-        format!(
-            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy readback failed: {error}"
-        )
-    })?;
-    let readback_step_accuracy = protocol::decode_step_accuracy(&step_accuracy_response)
-    .map_err(|error| {
-        format!(
-            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy readback failed: {error}"
-        )
-    })?;
-    if readback_step_accuracy.mode != step_accuracy.mode
-        || readback_step_accuracy.value != step_accuracy.value
-        || readback_step_accuracy.extension != step_accuracy.extension
+    if readback.step_accuracy.mode != step_accuracy.mode
+        || readback.step_accuracy.value != step_accuracy.value
+        || readback.step_accuracy.extension != step_accuracy.extension
     {
-        return Err(format!(
-            "F6 polling-rate was updated and read back as {polling_rate}, but F7 step-accuracy readback mismatched the requested value"
-        ));
+        return Err(
+            "F7 step-accuracy readback mismatched the requested value after both writes were sent"
+                .into(),
+        );
     }
 
     Ok(DeviceSettingsWriteResult {
         device: device_summary,
-        settings: DeviceSettingsSummary {
-            polling_rate,
-            step_accuracy: step_accuracy_summary(readback_step_accuracy),
-        },
+        settings: readback,
         polling_command: spaced_hex(protocol::wire_bytes(&polling_report)),
         step_accuracy_command: spaced_hex(protocol::wire_bytes(&step_accuracy_report)),
     })
@@ -1113,6 +1077,15 @@ fn write_report(device: &HidDevice, report: &[u8]) -> Result<(), String> {
         return Err(format!("short HID write: {written}/{}", report.len()));
     }
     Ok(())
+}
+
+fn send_device_setting(expected_device_path: &str, report: &[u8]) -> Result<(), String> {
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    write_report(&device, report)
 }
 
 fn transact_short(device: &HidDevice, request: &[u8], command: u8) -> Result<Vec<u8>, String> {

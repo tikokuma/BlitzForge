@@ -71,7 +71,7 @@
           <button id="tab-keymap" class="tab" type="button">キーバインド</button>
           <button id="tab-device" class="tab" type="button">デバイス</button>
           <button id="tab-vibration" class="tab" type="button">振動</button>
-          <button id="tab-macro" class="tab" type="button">マクロ（任意）</button>
+          <button id="tab-macro" class="tab" type="button">マクロ</button>
         </nav>
 
         <section id="settings-stick-section" class="panel settings-section">
@@ -416,6 +416,28 @@
           <div class="keymap-dialog-footer">
             <button id="keymap-dialog-cancel" type="button">キャンセル</button>
             <button id="keymap-dialog-confirm" class="primary" type="button" disabled>確認</button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog id="share-import-dialog" class="share-import-dialog" aria-labelledby="share-import-dialog-title" aria-describedby="share-import-dialog-note">
+        <div class="share-import-dialog-shell">
+          <div class="share-import-dialog-heading">
+            <div>
+              <p class="section-kicker">IMPORT SHARE PROFILE</p>
+              <h2 id="share-import-dialog-title">Shareコードから追加</h2>
+              <p>公式アプリで発行したShareコードを入力してください。</p>
+            </div>
+            <button id="share-import-dialog-close" class="dialog-close" type="button" aria-label="閉じる">×</button>
+          </div>
+          <div class="share-import-field">
+            <label for="share-import-code">Shareコード</label>
+            <input id="share-import-code" type="text" inputmode="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例: t8jJ15PW" />
+          </div>
+          <p id="share-import-dialog-note" class="share-import-dialog-note">コードを入力して「追加」を押してください。</p>
+          <div class="share-import-dialog-footer">
+            <button id="share-import-dialog-cancel" type="button">キャンセル</button>
+            <button id="share-import-dialog-confirm" class="primary" type="button">追加</button>
           </div>
         </div>
       </dialog>

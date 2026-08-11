@@ -17,6 +17,7 @@ import type {
 type ShareProfileInput = {
   name: string;
   profile: number[];
+  phoneUuid: string;
   deviceUuid: string;
   deviceName: string;
   firmwareVersion: string;

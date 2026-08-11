@@ -55,6 +55,7 @@ pub struct ProfileStoreState {
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSnapshot {
     pub id: i64,
+    pub phone_uuid: String,
     pub name: String,
     pub device_uuid: String,
     pub device_name: String,
@@ -87,6 +88,7 @@ pub struct ProfileListEntry {
 #[serde(rename_all = "camelCase")]
 pub struct ProfileDocument {
     pub id: i64,
+    pub phone_uuid: String,
     pub name: String,
     pub device_uuid: String,
     pub device_name: String,
@@ -101,6 +103,8 @@ pub struct ProfileDocument {
 #[serde(rename_all = "camelCase")]
 pub struct SaveProfileInput {
     pub id: Option<i64>,
+    #[serde(default)]
+    pub phone_uuid: String,
     pub name: String,
     pub raw_profile: Vec<u8>,
     #[serde(default)]
@@ -217,10 +221,25 @@ pub fn save_profile_at_path(
         }
         id
     } else {
+        let phone_uuid = if input.phone_uuid.trim().is_empty() {
+            transaction
+                .query_row(
+                    "SELECT FPhoneUUID_WebService FROM t_Config WHERE FDeleted = 0 AND TRIM(COALESCE(FPhoneUUID_WebService, '')) <> '' ORDER BY FID DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(sql_error)?
+                .flatten()
+                .unwrap_or_default()
+        } else {
+            input.phone_uuid.clone()
+        };
         transaction
             .execute(
-                "INSERT INTO t_Config (FID_WebService, FPhoneUUID_WebService, FDevUUID, FDevName, FUserID_WebService, FConfigName, FConfigJson, FFirmwareVersion, FZKMVersion, FDeleted) VALUES (-1, '', ?1, ?2, -1, ?3, ?4, ?5, ?6, 0)",
+                "INSERT INTO t_Config (FID_WebService, FPhoneUUID_WebService, FDevUUID, FDevName, FUserID_WebService, FConfigName, FConfigJson, FFirmwareVersion, FZKMVersion, FDeleted) VALUES (-1, ?1, ?2, ?3, -1, ?4, ?5, ?6, ?7, 0)",
                 params![
+                    phone_uuid,
                     input.device_uuid,
                     input.device_name,
                     name,
@@ -329,6 +348,7 @@ fn snapshot_by_id(connection: &Connection, id: i64) -> Result<Option<ProfileSnap
 fn snapshot_from_row(row: &Row<'_>) -> rusqlite::Result<ProfileSnapshot> {
     Ok(ProfileSnapshot {
         id: row.get(0)?,
+        phone_uuid: optional_text(row, 2)?,
         name: optional_text(row, 6)?,
         device_uuid: optional_text(row, 3)?,
         device_name: optional_text(row, 4)?,
@@ -375,6 +395,7 @@ fn document_from_snapshot(snapshot: ProfileSnapshot) -> Result<ProfileDocument, 
     protocol::normalize_v37_profile(&raw_profile)?;
     Ok(ProfileDocument {
         id: snapshot.id,
+        phone_uuid: snapshot.phone_uuid.clone(),
         name: snapshot.name.clone(),
         device_uuid: snapshot.device_uuid.clone(),
         device_name: snapshot.device_name.clone(),
@@ -480,6 +501,7 @@ mod tests {
     ) -> SaveProfileInput {
         SaveProfileInput {
             id,
+            phone_uuid: "A0AD9F12E604".into(),
             name: name.into(),
             raw_profile: profile(),
             device_uuid: "55E8224A7A680000".into(),

@@ -105,6 +105,7 @@ let rectangleAlgorithmDraft: RectangleAlgorithmSettings = {
 type SaveMode = "save" | "apply";
 type NotificationKind = "error" | "success";
 let notificationTimer: number | null = null;
+let shareImportDialogResolve: ((shareCode: string | null) => void) | null = null;
 
 function clearNotification() {
   if (notificationTimer !== null) {
@@ -910,7 +911,7 @@ function renderProfileLibrary() {
     share.type = "button";
     share.textContent = "Shareコードを発行";
     share.disabled = !entry.supported;
-    share.addEventListener("click", () => void shareSavedProfile(entry.id));
+    share.addEventListener("click", () => void shareSavedProfile(entry.id, share));
     const duplicate = document.createElement("button");
     duplicate.type = "button";
     duplicate.textContent = "複製";
@@ -972,6 +973,7 @@ async function duplicateProfile(entry: ProfileListEntry) {
     const source = await backend.loadSavedProfile(entry.id);
     const saved = await backend.saveProfile({
       id: null,
+      phoneUuid: source.phoneUuid,
       name,
       rawProfile: source.rawProfile,
       deviceUuid: source.deviceUuid,
@@ -998,6 +1000,7 @@ async function renameProfile(entry: ProfileListEntry) {
     const source = await backend.loadSavedProfile(entry.id);
     const saved = await backend.saveProfile({
       id: source.id,
+      phoneUuid: source.phoneUuid,
       name,
       rawProfile: source.rawProfile,
       deviceUuid: source.deviceUuid,
@@ -1125,8 +1128,46 @@ async function readProfileFromDevice() {
   }
 }
 
+function closeShareImportDialog(shareCode: string | null): void {
+  const dialog = byId<HTMLDialogElement>("share-import-dialog");
+  const resolve = shareImportDialogResolve;
+  shareImportDialogResolve = null;
+  if (dialog.open) dialog.close();
+  resolve?.(shareCode);
+}
+
+function openShareImportDialog(): Promise<string | null> {
+  const dialog = byId<HTMLDialogElement>("share-import-dialog");
+  const input = byId<HTMLInputElement>("share-import-code");
+  const note = byId("share-import-dialog-note");
+  if (dialog.open) return Promise.resolve(null);
+  input.value = "";
+  input.removeAttribute("aria-invalid");
+  note.textContent = "コードを入力して「追加」を押してください。";
+  note.removeAttribute("data-kind");
+  return new Promise((resolve) => {
+    shareImportDialogResolve = resolve;
+    dialog.showModal();
+    window.setTimeout(() => input.focus(), 0);
+  });
+}
+
+function confirmShareImportDialog(): void {
+  const input = byId<HTMLInputElement>("share-import-code");
+  const note = byId("share-import-dialog-note");
+  const shareCode = input.value.trim();
+  if (!shareCode) {
+    input.setAttribute("aria-invalid", "true");
+    note.textContent = "Shareコードを入力してください。";
+    note.dataset.kind = "error";
+    input.focus();
+    return;
+  }
+  closeShareImportDialog(shareCode);
+}
+
 async function importShareProfile() {
-  const shareCode = window.prompt("公式Shareコードを入力してください", "")?.trim();
+  const shareCode = await openShareImportDialog();
   if (!shareCode) return;
   setBusy(true);
   try {
@@ -1158,6 +1199,7 @@ async function exportShareCode(profile: ProfileDocument) {
     const shareCode = await backend.createShareCode({
       name: profile.name || "BIGBIGWON Profile",
       profile: profile.rawProfile,
+      phoneUuid: profile.phoneUuid,
       deviceUuid: profile.deviceUuid || session?.uuid || "",
       deviceName: profile.deviceName || session?.device.product || "",
       firmwareVersion: profile.firmwareVersion,
@@ -1175,6 +1217,8 @@ async function exportShareCode(profile: ProfileDocument) {
     }
     if (!copied) {
       showError(`公式Shareコードをクリップボードにコピーできませんでした。\n${shareCode}`);
+    } else {
+      showSuccess(`公式Shareコードを発行しました。\nShareコード: ${shareCode}\nクリップボードにコピーしました。`);
     }
   } catch (error) {
     showError(errorMessage(error));
@@ -1183,7 +1227,11 @@ async function exportShareCode(profile: ProfileDocument) {
   }
 }
 
-async function shareSavedProfile(id: number) {
+async function shareSavedProfile(id: number, button: HTMLButtonElement) {
+  if (busy) return;
+  const originalLabel = button.textContent ?? "Shareコードを発行";
+  button.disabled = true;
+  button.textContent = "発行中…";
   setBusy(true);
   try {
     const profile = await backend.loadSavedProfile(id);
@@ -1191,6 +1239,8 @@ async function shareSavedProfile(id: number) {
   } catch (error) {
     showError(errorMessage(error));
   } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
     setBusy(false);
   }
 }
@@ -1242,6 +1292,7 @@ function buildCommitProfileInput(
   return {
     profile: {
       id: profile.id,
+      phoneUuid: profile.phoneUuid,
       name,
       rawProfile: profile.rawProfile,
       deviceUuid: profile.deviceUuid || deviceSession?.uuid || "",
@@ -1369,6 +1420,26 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("new-profile").addEventListener("click", () => void createNewProfile());
   byId("read-device-profile").addEventListener("click", () => void readProfileFromDevice());
   byId("import-profile").addEventListener("click", () => void importShareProfile());
+  byId("share-import-dialog-close").addEventListener("click", () => closeShareImportDialog(null));
+  byId("share-import-dialog-cancel").addEventListener("click", () => closeShareImportDialog(null));
+  byId("share-import-dialog-confirm").addEventListener("click", confirmShareImportDialog);
+  byId<HTMLInputElement>("share-import-code").addEventListener("input", () => {
+    const input = byId<HTMLInputElement>("share-import-code");
+    const note = byId("share-import-dialog-note");
+    input.removeAttribute("aria-invalid");
+    note.textContent = "コードを入力して「追加」を押してください。";
+    note.removeAttribute("data-kind");
+  });
+  byId<HTMLInputElement>("share-import-code").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      confirmShareImportDialog();
+    }
+  });
+  byId<HTMLDialogElement>("share-import-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeShareImportDialog(null);
+  });
   byId("back-home").addEventListener("click", () => {
     showView("home");
     void refreshProfiles().catch((error: unknown) => showError(errorMessage(error)));

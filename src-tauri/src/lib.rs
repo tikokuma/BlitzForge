@@ -130,6 +130,7 @@ where
 #[serde(rename_all = "camelCase")]
 struct ProfileDocumentView {
     id: Option<i64>,
+    phone_uuid: String,
     name: String,
     device_uuid: String,
     device_name: String,
@@ -151,6 +152,7 @@ fn saved_profile_view(
     let summary = device::build_profile_summary(document.raw_profile, device)?;
     Ok(ProfileDocumentView {
         id: Some(document.id),
+        phone_uuid: document.phone_uuid,
         name: document.name,
         device_uuid: document.device_uuid,
         device_name: document.device_name,
@@ -168,6 +170,7 @@ fn saved_profile_view(
 fn transient_profile_view(
     summary: ProfileSummary,
     name: &str,
+    phone_uuid: String,
     device_uuid: String,
     device_name: String,
     firmware_version: String,
@@ -175,6 +178,7 @@ fn transient_profile_view(
 ) -> ProfileDocumentView {
     ProfileDocumentView {
         id: None,
+        phone_uuid,
         name: name.to_string(),
         device_uuid,
         device_name,
@@ -604,6 +608,7 @@ async fn read_profile(
                 String::new(),
                 String::new(),
                 String::new(),
+                String::new(),
             ))
         },
     )
@@ -628,6 +633,7 @@ async fn import_share_profile(
         Ok(transient_profile_view(
             summary,
             name,
+            imported.phone_uuid,
             imported.device_uuid,
             imported.device_name,
             imported.firmware_version,
@@ -642,6 +648,7 @@ async fn import_share_profile(
 async fn create_share_code(
     name: String,
     profile: Vec<u8>,
+    phone_uuid: String,
     device_uuid: String,
     device_name: String,
     firmware_version: String,
@@ -653,6 +660,7 @@ async fn create_share_code(
             .map_err(|error| format!("プロファイルをShare形式へ変換できませんでした: {error}"))?;
         share::create_share_code(share::ShareProfile {
             name,
+            phone_uuid,
             device_uuid,
             device_name,
             firmware_version,
@@ -670,6 +678,7 @@ fn new_profile() -> Result<ProfileDocumentView, String> {
     Ok(transient_profile_view(
         summary,
         "新しいプロファイル",
+        String::new(),
         String::new(),
         String::new(),
         String::new(),

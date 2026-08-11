@@ -6,11 +6,12 @@ use serde::{Deserialize, Serialize};
 
 const SHARE_CONFIG_URL: &str = "http://m.bigbigwon.com:8080/dev/shareConfig";
 const IMPORT_SHARE_CONFIG_URL: &str = "http://m.bigbigwon.com:8080/dev/importShareConfig";
-const SHARE_CONFIG_TYPE: i64 = 1;
+const SHARE_CONFIG_TYPE: i64 = 3;
 
 #[derive(Clone)]
 pub struct ShareProfile {
     pub name: String,
+    pub phone_uuid: String,
     pub device_uuid: String,
     pub device_name: String,
     pub firmware_version: String,
@@ -20,6 +21,7 @@ pub struct ShareProfile {
 
 pub struct ImportedShareProfile {
     pub name: String,
+    pub phone_uuid: String,
     pub device_uuid: String,
     pub device_name: String,
     pub firmware_version: String,
@@ -54,7 +56,14 @@ struct ShareApiResponse {
     #[serde(default)]
     msg: Option<String>,
     #[serde(default)]
-    data: Option<ShareConfigData>,
+    data: Option<ShareApiData>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ShareApiData {
+    ShareCode(String),
+    Config(ShareConfigData),
 }
 
 #[derive(Deserialize)]
@@ -62,6 +71,8 @@ struct ShareApiResponse {
 struct ShareConfigData {
     #[serde(default)]
     share_code: Option<String>,
+    #[serde(default)]
+    phone_uuid: Option<String>,
     #[serde(default)]
     config_name: Option<String>,
     #[serde(default)]
@@ -112,11 +123,25 @@ fn check_response(response: &ShareApiResponse) -> Result<(), String> {
     }
 }
 
+fn share_code_from_response(response: &ShareApiResponse) -> Result<String, String> {
+    let code = match response.data.as_ref() {
+        Some(ShareApiData::ShareCode(code)) => code.as_str(),
+        Some(ShareApiData::Config(data)) => data.share_code.as_deref().unwrap_or_default(),
+        None => return Err("公式Share APIの応答にShareコードがありません".to_string()),
+    };
+
+    if code.trim().is_empty() {
+        return Err("公式Share APIの応答にShareコードがありません".to_string());
+    }
+
+    Ok(code.to_string())
+}
+
 pub fn create_share_code(profile: ShareProfile) -> Result<String, String> {
     let response: ShareApiResponse = post_json(
         SHARE_CONFIG_URL,
         &ShareConfigRequest {
-            phone_uuid: String::new(),
+            phone_uuid: profile.phone_uuid,
             dev_uuid: profile.device_uuid,
             config_type: SHARE_CONFIG_TYPE,
             config_name: profile.name,
@@ -127,13 +152,7 @@ pub fn create_share_code(profile: ShareProfile) -> Result<String, String> {
         },
     )?;
     check_response(&response)?;
-    let code = response
-        .data
-        .ok_or_else(|| "公式Share APIの応答にデータがありません".to_string())?
-        .share_code
-        .filter(|code| !code.trim().is_empty())
-        .ok_or_else(|| "公式Share APIの応答にShareコードがありません".to_string())?;
-    Ok(code)
+    share_code_from_response(&response)
 }
 
 pub fn import_share_code(
@@ -149,11 +168,16 @@ pub fn import_share_code(
         },
     )?;
     check_response(&response)?;
-    let data = response
-        .data
-        .ok_or_else(|| "公式Share APIの応答にデータがありません".to_string())?;
+    let data = match response.data {
+        Some(ShareApiData::Config(data)) => data,
+        Some(ShareApiData::ShareCode(_)) => {
+            return Err("公式Share APIの応答にプロファイルデータがありません".to_string());
+        }
+        None => return Err("公式Share APIの応答にプロファイルデータがありません".to_string()),
+    };
     Ok(ImportedShareProfile {
         name: data.config_name.unwrap_or_default(),
+        phone_uuid: data.phone_uuid.unwrap_or_default(),
         device_uuid: data.dev_uuid.unwrap_or_default(),
         device_name: data.device_model.unwrap_or_default(),
         firmware_version: data.firmware_version.unwrap_or_default(),
@@ -182,7 +206,8 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(value["configType"], 1);
+        assert_eq!(value["phoneUuid"], "phone");
+        assert_eq!(value["configType"], 3);
         assert_eq!(value["configName"], "Preset");
         assert_eq!(value["configJson"], "[1,2,3]");
         assert_eq!(value["deviceModel"], "Rainbow2 SE");
@@ -196,9 +221,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.code, 0);
-        assert_eq!(
-            response.data.unwrap().share_code.as_deref(),
-            Some("H4pyvj86")
-        );
+        match response.data.unwrap() {
+            ShareApiData::Config(data) => {
+                assert_eq!(data.share_code.as_deref(), Some("H4pyvj86"));
+            }
+            ShareApiData::ShareCode(_) => panic!("expected config object"),
+        }
+    }
+
+    #[test]
+    fn parses_share_code_string_response() {
+        let response: ShareApiResponse =
+            serde_json::from_str(r#"{"code":0,"msg":"OK","data":"ZWUDan3k"}"#).unwrap();
+
+        assert_eq!(share_code_from_response(&response).unwrap(), "ZWUDan3k");
     }
 }
