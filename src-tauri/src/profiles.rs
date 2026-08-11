@@ -79,6 +79,7 @@ pub struct ProfileListEntry {
     pub profile_version: Option<String>,
     pub supported: bool,
     pub incompatibility_reason: Option<String>,
+    pub active: bool,
     pub snapshot: ProfileSnapshot,
 }
 
@@ -364,6 +365,7 @@ fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
         profile_version,
         supported,
         incompatibility_reason,
+        active: false,
         snapshot,
     }
 }

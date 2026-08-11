@@ -63,7 +63,7 @@
           <button id="back-home" class="back-button">← 概要へ戻る</button>
           <strong id="settings-profile-name"></strong>
           <span id="settings-dirty" class="status-pill" hidden>未保存</span>
-          <button id="save-profile" class="primary" data-operation disabled>プロファイルを保存</button>
+          <button id="save-profile" class="primary" data-operation disabled>保存</button>
         </div>
 
         <nav class="settings-tabs" aria-label="設定カテゴリ">
@@ -357,6 +357,30 @@
           </div>
         </section>
       </div>
+
+      <dialog id="save-dialog" class="save-dialog" aria-labelledby="save-dialog-title">
+        <div class="save-dialog-shell">
+          <div class="save-dialog-heading">
+            <div>
+              <p class="section-kicker">SAVE REVIEW</p>
+              <h2 id="save-dialog-title">保存内容を確認</h2>
+              <p id="save-dialog-profile-name" class="save-dialog-profile"></p>
+            </div>
+            <button id="save-dialog-cancel" class="dialog-close" type="button" aria-label="閉じる">×</button>
+          </div>
+          <section class="save-dialog-diff" aria-labelledby="save-diff-title">
+            <h3 id="save-diff-title">変更した設定</h3>
+            <label class="save-diff-select-label" for="save-diff-select">設定を選択</label>
+            <select id="save-diff-select" class="save-diff-select"></select>
+            <p id="save-diff-value" class="save-diff-value" aria-live="polite"></p>
+          </section>
+          <p id="save-dialog-apply-note" class="save-dialog-note"></p>
+          <div class="save-dialog-footer">
+            <button id="save-dialog-only" type="button">保存のみ</button>
+            <button id="save-dialog-apply" class="primary" type="button">保存して適用</button>
+          </div>
+        </div>
+      </dialog>
 
       <dialog id="keymap-dialog" class="keymap-dialog" aria-labelledby="keymap-dialog-title">
         <div class="keymap-dialog-shell">

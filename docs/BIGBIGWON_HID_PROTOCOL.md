@@ -315,6 +315,8 @@ The UI label is `矩形アルゴリズム` (rectangular algorithm). After the us
 
 The first two rows are the orange/on state; the last row is the default/off profile that the app applied again when it returned to the configuration list. The D7 packet's `profile[0x00C]` is the byte at capture-data index `0x10`, because the first fragment carries profile bytes `0x004..` after the four-byte CRC/length header. The static JSON converter already names this location `joystickCircleLimit`, with `stickTurn` at `0x00D`; live capture now binds the UI's rectangular-algorithm switch to `joystickCircleLimit = 0x10` when enabled and `0x00` in the reset/default state.
 
+The official v37 converter distinguishes the two stick settings within `joystickCircleLimit`: the left-stick rectangular algorithm is bit `0x01`, and the right-stick rectangular algorithm is bit `0x10`. The `stickTurn` byte is separate; its bit `0x10` is the right X-axis reversal flag and must not be used for the right-stick rectangular algorithm.
+
 The capture is `tools/usbpcap/rect-algorithm-20260808-1.pcap` (SHA-256 `DDCC6FAE8E397152B265B02DE17A434FFD2A591F22AE6D97A5F0D4C2D83B1A1C`). The later direct D6 read completed normally and returned the reset/default `D0A4` profile, including `profile[0x00C] = 00`. This proves the serialized mode value, but not yet the mathematical stick-coordinate transform performed by the firmware; measuring that requires synchronized stick-motion input/output samples with the switch on and off.
 
 ## Failure handling: incomplete `D6` transfers

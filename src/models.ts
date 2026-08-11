@@ -35,6 +35,7 @@ export type ProfileListEntry = {
   profileVersion: string | null;
   supported: boolean;
   incompatibilityReason: string | null;
+  active: boolean;
   snapshot: ProfileSnapshot;
 };
 
@@ -115,6 +116,58 @@ export type SaveProfileInput = {
   firmwareVersion: string;
   zkmVersion: string;
   snapshot: ProfileSnapshot | null;
+};
+
+export type CommitMode = "save" | "saveAndApply";
+
+export type MacroCommitInput = {
+  slot: number;
+  rawRecord: number[];
+  originalRecord: number[];
+};
+
+export type CommitProfileInput = {
+  profile: SaveProfileInput;
+  controllerSettings: ControllerSettingsInput | null;
+  vibration: VibrationSettings | null;
+  macro: MacroCommitInput | null;
+  devicePath: string | null;
+  deviceUuid: string | null;
+  deviceSettings: DeviceSettings | null;
+  deviceSettingsBaseline: DeviceSettings | null;
+  mode: CommitMode;
+};
+
+export type SettingChange = {
+  label: string;
+  before: string;
+  after: string;
+};
+
+export type CommitPreview = {
+  profileRequested: boolean;
+  macroRequested: boolean;
+  applyEligible: boolean;
+  deviceSettingsRequested: boolean;
+  changes: SettingChange[];
+  warnings: string[];
+  applyUnavailableReason: string | null;
+};
+
+export type CommitResult = {
+  profileRequested: boolean;
+  profileSaved: boolean;
+  macroRequested: boolean;
+  macroSaved: boolean;
+  applyRequested: boolean;
+  profileApplied: boolean;
+  deviceSettingsRequested: boolean;
+  deviceSettingsSaved: boolean;
+  warnings: string[];
+  profile: ProfileDocument | null;
+  macro: MacroWriteResult | null;
+  appliedProfile: ProfileSummary | null;
+  deviceSettings: DeviceSettingsWriteResult | null;
 };
 
 export type ApplyProfileResult = {

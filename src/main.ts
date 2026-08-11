@@ -15,11 +15,14 @@ import {
   KEYMAP_DEFAULT_ENTRY,
   KEYMAP_VISIBLE_SOURCES,
 } from "./domain/keymap";
-import { deviceUuidsEqual, parseProfileBytes, profileBytesEqual } from "./domain/profile";
+import { deviceUuidsEqual } from "./domain/profile";
 import { createKeymapEditor } from "./features/keymap-editor";
 import { createMacroEditor } from "./features/macro-editor";
 import type {
   ActiveProfileState,
+  CommitProfileInput,
+  CommitPreview,
+  CommitResult,
   ControllerSettings,
   ControllerSettingsInput,
   CurveSettings,
@@ -83,7 +86,6 @@ const STEP_ACCURACY_OPTIONS = [
 let busy = false;
 let deviceSession: DeviceSession | null = null;
 let profileList: ProfileListEntry[] = [];
-const savedProfileBytesCache = new Map<string, number[] | null>();
 let editingProfile: ProfileDocument | null = null;
 let activeProfileState: ActiveProfileState = "unknown";
 let activeDeviceProfile: number[] | null = null;
@@ -100,6 +102,7 @@ let rectangleAlgorithmDraft: RectangleAlgorithmSettings = {
   leftStick: false,
   rightStick: false,
 };
+type SaveMode = "save" | "apply";
 
 function setMessage(message: string) {
   const target = byId("message");
@@ -126,9 +129,8 @@ function syncActions() {
   byId<HTMLButtonElement>("import-profile").disabled = busy;
   byId<HTMLButtonElement>("new-profile").disabled = busy;
   byId<HTMLButtonElement>("read-device-profile").disabled = busy || !deviceSession;
-  byId("settings-dirty").hidden = !settingsDirty && !vibrationDirty && !macroDirty;
-  byId<HTMLButtonElement>("save-profile").disabled = busy || !editingProfile
-    || (editingProfile.saved && !settingsDirty && !vibrationDirty && !deviceSettingsDirty && !macroDirty);
+  byId("settings-dirty").hidden = !settingsDirty && !vibrationDirty && !deviceSettingsDirty && !macroDirty;
+  byId<HTMLButtonElement>("save-profile").disabled = busy || editingProfile === null;
   macroEditor.syncActions();
 }
 
@@ -183,7 +185,6 @@ function clearProfile() {
   deviceSettingsDirty = false;
   currentDeviceSettings = null;
   byId("settings-profile-name").textContent = "";
-  byId<HTMLButtonElement>("save-profile").textContent = "プロファイルを保存";
   renderDetails("profile-details", []);
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
@@ -194,7 +195,6 @@ function clearProfile() {
 
 function renderProfile(profile: ProfileDocument) {
   byId("settings-profile-name").textContent = profile.name;
-  byId<HTMLButtonElement>("save-profile").textContent = "プロファイルを保存";
   const rapid = profile.settings.rapidFire;
   const rapidButtons = KEYMAP_VISIBLE_SOURCES
     .filter(({ slot }) => rapid.keys[slot] === true)
@@ -702,25 +702,76 @@ function profileMatchesDevice(
   return deviceUuidsEqual(profile.deviceUuid, session?.uuid ?? "");
 }
 
-function savedProfileBytes(entry: ProfileListEntry): number[] | null {
-  const cacheKey = entry.snapshot.configJson;
-  if (savedProfileBytesCache.has(cacheKey)) {
-    return savedProfileBytesCache.get(cacheKey) ?? null;
-  }
+function renderSelectedSaveDiff(): void {
+  const select = byId<HTMLSelectElement>("save-diff-select");
+  const option = select.selectedOptions[0];
+  byId("save-diff-value").textContent = option?.dataset.before !== undefined
+    && option.dataset.after !== undefined
+    ? `変更前: ${option.dataset.before} → 変更後: ${option.dataset.after}`
+    : "";
+}
 
-  const bytes = parseProfileBytes(entry.snapshot.configJson);
-  savedProfileBytesCache.set(cacheKey, bytes);
-  return bytes;
+function renderSaveDialog(preview: CommitPreview): void {
+  const profile = editingProfile;
+  if (!profile) return;
+  const select = byId<HTMLSelectElement>("save-diff-select");
+  select.replaceChildren();
+  if (preview.changes.length === 0) {
+    const option = document.createElement("option");
+    option.textContent = "変更された項目はありません。";
+    option.disabled = true;
+    select.append(option);
+    select.disabled = true;
+  } else {
+    select.disabled = false;
+    select.append(...preview.changes.map((item, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = item.label;
+      option.dataset.before = item.before;
+      option.dataset.after = item.after;
+      return option;
+    }));
+    select.value = "0";
+  }
+  renderSelectedSaveDiff();
+  byId("save-dialog-profile-name").textContent = profile.name;
+  byId<HTMLButtonElement>("save-dialog-only").disabled = preview.changes.length === 0;
+  const canApply = preview.applyEligible;
+  byId<HTMLButtonElement>("save-dialog-apply").disabled = !canApply;
+  byId("save-dialog-apply-note").textContent = canApply
+    ? "保存完了後、接続中のコントローラーへ反映します。"
+    : preview.applyUnavailableReason ?? "適用できる変更がありません。";
+}
+
+async function openSaveDialog(): Promise<void> {
+  if (busy || !editingProfile) return;
+  const profile = editingProfile;
+  setBusy(true, "保存内容を確認しています…");
+  try {
+    const preview = await backend.previewProfileCommit(buildCommitProfileInput(profile, profile.name, "save"));
+    renderSaveDialog(preview);
+    const dialog = byId<HTMLDialogElement>("save-dialog");
+    if (!dialog.open) dialog.showModal();
+  } catch (error) {
+    setMessage(errorMessage(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+function closeSaveDialog(): void {
+  const dialog = byId<HTMLDialogElement>("save-dialog");
+  if (dialog.open) dialog.close();
+}
+
+function chooseSaveMode(mode: SaveMode): void {
+  closeSaveDialog();
+  void saveProfileDocument(mode);
 }
 
 function profileIsActive(entry: ProfileListEntry): boolean {
-  if ((activeProfileState !== "known" && activeProfileState !== "remembered")
-    || activeDeviceProfile === null
-    || !profileMatchesDevice(entry)) {
-    return false;
-  }
-  const saved = savedProfileBytes(entry);
-  return saved !== null && profileBytesEqual(saved, activeDeviceProfile);
+  return (activeProfileState === "known" || activeProfileState === "remembered") && entry.active;
 }
 
 function renderActiveProfileStatus() {
@@ -842,8 +893,12 @@ function setEditingProfile(profile: ProfileDocument, preserveMacro = false) {
 }
 
 async function refreshProfiles() {
-  profileList = await backend.listProfiles();
-  savedProfileBytesCache.clear();
+  profileList = await backend.listProfiles({
+    deviceUuid: deviceSession?.uuid ?? null,
+    activeProfile: activeDeviceProfile && deviceSession
+      ? [...activeDeviceProfile]
+      : null,
+  });
   renderProfileLibrary();
 }
 
@@ -967,7 +1022,6 @@ async function scan() {
     clearProfile();
     activeDeviceProfile = null;
     activeProfileState = deviceSession ? "unknown" : "known";
-    profilesPromise = refreshProfiles();
     if (deviceSession) {
       restoreRememberedActiveProfile(deviceSession);
       try {
@@ -979,6 +1033,7 @@ async function scan() {
         byId("device-dirty").hidden = true;
       }
     }
+    profilesPromise = refreshProfiles();
   } catch (error) {
     setConnection(null);
     clearProfile();
@@ -1109,7 +1164,7 @@ async function applySavedProfileFromCard(id: number) {
       throw new Error("選択したプロファイルは接続中コントローラーに適用できません。");
     }
     await applySavedProfileToDevice(profile, session);
-    renderProfileLibrary();
+    await refreshProfiles();
     setMessage("プロファイルをコントローラーへ適用しました。");
   } catch (error) {
     setMessage(errorMessage(error));
@@ -1138,128 +1193,123 @@ async function fetchDeviceSettings(devicePath: string): Promise<DeviceSettings> 
   return backend.readDeviceSettings(devicePath);
 }
 
-async function saveDeviceSettingsToDevice(session: DeviceSession) {
-  const result = await backend.setDeviceSettings(session.device.path, readDeviceSettings());
-  applyDeviceSettings(result.settings);
-}
-
-async function saveProfileDocument() {
-  const profile = editingProfile;
-  if (!profile) return;
-  const session = deviceSession;
-  const profileNeedsSave = !profile.saved || settingsDirty || vibrationDirty;
-  const macroNeedsSave = macroEditor.isDirty();
-  if (!profileNeedsSave && !macroNeedsSave && !deviceSettingsDirty) return;
-  if (!profileNeedsSave && macroNeedsSave) {
-    setBusy(true, "マクロを保存しています…");
-    try {
-      await macroEditor.save();
-      if (session && deviceSettingsDirty) {
-        await saveDeviceSettingsToDevice(session);
-      }
-      setMessage(deviceSettingsDirty ? "マクロとデバイス設定を保存しました。" : "マクロを保存しました。");
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-    return;
-  }
-  if (!profileNeedsSave) {
-    if (!session) return;
-    setBusy(true, "ポーリングレートとステップ精度を保存しています…");
-    try {
-      await saveDeviceSettingsToDevice(session);
-      setMessage("デバイス設定を保存しました。");
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
-    return;
-  }
-  let pendingRawProfile = profile.rawProfile;
-  setBusy(true, "プロファイルを共有DBへ保存しています…");
-  try {
-    if (settingsDirty) {
-      const updated = await backend.updateControllerSettings(pendingRawProfile, readSettingsInput());
-      pendingRawProfile = updated.rawProfile;
-    }
-    if (vibrationDirty) {
-      const updated = await backend.updateVibration(pendingRawProfile, readVibrationSettings());
-      pendingRawProfile = updated.rawProfile;
-    }
-    let name = profile.name;
-    if (profile.id === null) {
-      const prompted = window.prompt("保存するプロファイル名", name);
-      if (prompted === null) return;
-      name = prompted;
-    }
-    const input = {
+function buildCommitProfileInput(
+  profile: ProfileDocument,
+  name: string,
+  mode: SaveMode,
+): CommitProfileInput {
+  return {
+    profile: {
       id: profile.id,
       name,
-      rawProfile: pendingRawProfile,
-      deviceUuid: profile.deviceUuid || session?.uuid || "",
-      deviceName: profile.deviceName || session?.device.product || "",
+      rawProfile: profile.rawProfile,
+      deviceUuid: profile.deviceUuid || deviceSession?.uuid || "",
+      deviceName: profile.deviceName || deviceSession?.device.product || "",
       firmwareVersion: profile.firmwareVersion,
-      zkmVersion: profile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
+      zkmVersion: profile.zkmVersion || (deviceSession?.zkmVersion ? String(deviceSession.zkmVersion) : ""),
       snapshot: profile.snapshot,
-    };
-    const saved = await backend.saveProfile(input);
-    if (macroNeedsSave) {
-      await macroEditor.save();
-    }
-    setEditingProfile(saved, true);
-    const matchesSession = session !== null && profileMatchesDevice(saved, session);
-    if (matchesSession) {
-      await applySavedProfileToDevice(saved, session);
-    }
-    if (session && deviceSettingsDirty) {
-      await saveDeviceSettingsToDevice(session);
-    }
-    await refreshProfiles();
-    setMessage(matchesSession
-      ? "プロファイルを保存し、コントローラーへ自動適用しました。"
-      : "プロファイルをConfig.dbへ保存しました。接続中のコントローラーには適用していません。");
+    },
+    controllerSettings: readSettingsInput(),
+    vibration: readVibrationSettings(),
+    macro: macroEditor.readDraft(),
+    devicePath: deviceSession?.device.path ?? null,
+    deviceUuid: deviceSession?.uuid ?? null,
+    deviceSettings: currentDeviceSettings ? readDeviceSettings() : null,
+    deviceSettingsBaseline: currentDeviceSettings ? cloneDeviceSettings(currentDeviceSettings) : null,
+    mode: mode === "apply" ? "saveAndApply" : "save",
+  };
+}
+
+function applyCommitResult(result: CommitResult): void {
+  if (result.profile) setEditingProfile(result.profile, true);
+  if (result.macro) macroEditor.markSaved(result.macro);
+  if (result.deviceSettings) applyDeviceSettings(result.deviceSettings.settings);
+  if (result.appliedProfile && deviceSession) {
+    setKnownActiveProfile(result.appliedProfile.rawProfile, deviceSession);
+  }
+}
+
+function commitResultSummary(result: CommitResult): string {
+  const stage = (requested: boolean, succeeded: boolean) => {
+    if (!requested) return "未実行";
+    return succeeded ? "成功" : "未完了";
+  };
+  return [
+    `プロファイル保存: ${stage(result.profileRequested, result.profileSaved)}`,
+    `マクロ保存: ${stage(result.macroRequested, result.macroSaved)}`,
+    `適用: ${stage(result.applyRequested, result.profileApplied)}`,
+    `デバイス設定保存: ${stage(result.deviceSettingsRequested, result.deviceSettingsSaved)}`,
+  ].join(" / ");
+}
+
+function commitResultMessage(result: CommitResult, mode: SaveMode, prefix = ""): string {
+  const headline = result.warnings.length > 0
+    ? "保存処理は完了しましたが、一部の工程に失敗または未実行があります。"
+    : result.profileApplied
+      ? "プロファイルを保存し、コントローラーへ適用しました。"
+      : result.profileSaved
+        ? mode === "apply"
+          ? "プロファイルを保存しました。コントローラーには適用していません。"
+          : "プロファイルを保存しました。"
+        : "保存処理が完了しました。";
+  return [
+    prefix,
+    headline,
+    ...result.warnings,
+    `保存結果: ${commitResultSummary(result)}`,
+  ].filter((line) => line.length > 0).join("\n");
+}
+
+async function saveProfileDocument(mode: SaveMode) {
+  const profile = editingProfile;
+  if (!profile) return;
+  let name = profile.name;
+  if (profile.id === null) {
+    const prompted = window.prompt("保存するプロファイル名", name);
+    if (prompted === null) return;
+    name = prompted;
+  }
+  let committedResult: CommitResult | null = null;
+  setBusy(true, "プロファイルを共有DBへ保存しています…");
+  try {
+    committedResult = await backend.commitProfile(buildCommitProfileInput(profile, name, mode));
+    applyCommitResult(committedResult);
+    if (committedResult.profileSaved || committedResult.profileApplied) await refreshProfiles();
+    setMessage(commitResultMessage(committedResult, mode));
   } catch (error) {
     const message = errorMessage(error);
-    if (message.startsWith("PROFILE_CONFLICT:") && profile.id !== null) {
+    if (committedResult === null && message.startsWith("PROFILE_CONFLICT:") && profile.id !== null) {
       const reload = window.confirm("公式アプリ側で変更されています。OKで再読込、キャンセルで別名保存します。");
       if (reload) {
         await openSavedProfile(profile.id);
       } else {
         const copyName = window.prompt("別名で保存する名前", `${profile.name} コピー`);
         if (copyName) {
+          let copyResult: CommitResult | null = null;
           try {
-            const saved = await backend.saveProfile({
-              id: null,
-              name: copyName,
-              rawProfile: pendingRawProfile,
-              deviceUuid: profile.deviceUuid || session?.uuid || "",
-              deviceName: profile.deviceName || session?.device.product || "",
-              firmwareVersion: profile.firmwareVersion,
-              zkmVersion: profile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
-              snapshot: null,
-            });
-            if (macroNeedsSave) {
-              await macroEditor.save();
-            }
-            setEditingProfile(saved, true);
-            if (session && profileMatchesDevice(saved, session)) {
-              await applySavedProfileToDevice(saved, session);
-            }
-            if (session && deviceSettingsDirty) {
-              await saveDeviceSettingsToDevice(session);
-            }
-            await refreshProfiles();
-            setMessage("外部変更を上書きせず、別名で保存しました。");
+            const copyInput = buildCommitProfileInput(profile, copyName, mode);
+            copyInput.profile.id = null;
+            copyInput.profile.snapshot = null;
+            copyResult = await backend.commitProfile(copyInput);
+            applyCommitResult(copyResult);
+            if (copyResult.profileSaved || copyResult.profileApplied) await refreshProfiles();
+            setMessage(commitResultMessage(copyResult, mode, "外部変更を上書きせず、別名で保存しました。"));
           } catch (copyError) {
-            setMessage(errorMessage(copyError));
+            if (copyResult) {
+              setMessage(`${errorMessage(copyError)}\n保存結果: ${commitResultSummary(copyResult)}`);
+            } else {
+              setMessage(errorMessage(copyError));
+            }
           }
         }
       }
     } else {
-      setMessage(message);
+      if (committedResult) {
+        await refreshProfiles().catch(() => undefined);
+        setMessage(`${message}\n保存結果: ${commitResultSummary(committedResult)}`);
+      } else {
+        setMessage(message);
+      }
     }
   } finally {
     setBusy(false);
@@ -1276,7 +1326,11 @@ window.addEventListener("DOMContentLoaded", () => {
     showView("home");
     void refreshProfiles().catch((error: unknown) => setMessage(errorMessage(error)));
   });
-  byId("save-profile").addEventListener("click", () => void saveProfileDocument());
+  byId("save-profile").addEventListener("click", () => void openSaveDialog());
+  byId("save-dialog-cancel").addEventListener("click", closeSaveDialog);
+  byId("save-diff-select").addEventListener("change", renderSelectedSaveDiff);
+  byId("save-dialog-only").addEventListener("click", () => chooseSaveMode("save"));
+  byId("save-dialog-apply").addEventListener("click", () => chooseSaveMode("apply"));
   macroEditor.setup();
   byId("tab-stick").addEventListener("click", () => selectSettingsTab("stick"));
   byId("tab-keymap").addEventListener("click", () => selectSettingsTab("keymap"));

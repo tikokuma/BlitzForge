@@ -8,9 +8,9 @@ pub const V37_LEFT_VIBRATION_MIN_OFFSET: usize = 0x148;
 pub const V37_RIGHT_VIBRATION_MIN_OFFSET: usize = 0x149;
 pub const V37_LEFT_VIBRATION_MAX_OFFSET: usize = 0x14c;
 pub const V37_RIGHT_VIBRATION_MAX_OFFSET: usize = 0x14d;
-pub const V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00c;
-pub const V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00d;
-const V37_RECTANGULAR_ALGORITHM_MASK: u8 = 0x10;
+const V37_RECTANGULAR_ALGORITHM_OFFSET: usize = 0x00c;
+const V37_LEFT_RECTANGULAR_ALGORITHM_MASK: u8 = 0x01;
+const V37_RIGHT_RECTANGULAR_ALGORITHM_MASK: u8 = 0x10;
 pub const V37_LEFT_DEFAULT_CURVE_OFFSET: usize = 0x00e;
 pub const V37_RIGHT_DEFAULT_CURVE_OFFSET: usize = 0x03a;
 pub const V37_TURBO_KEY_MASK_OFFSET: usize = 0x140;
@@ -343,11 +343,11 @@ pub fn controller_settings(profile: &[u8]) -> Result<ControllerSettings, String>
     }
 
     Ok(ControllerSettings {
-        left_rectangle_algorithm: profile[V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET]
-            & V37_RECTANGULAR_ALGORITHM_MASK
+        left_rectangle_algorithm: profile[V37_RECTANGULAR_ALGORITHM_OFFSET]
+            & V37_LEFT_RECTANGULAR_ALGORITHM_MASK
             != 0,
-        right_rectangle_algorithm: profile[V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET]
-            & V37_RECTANGULAR_ALGORITHM_MASK
+        right_rectangle_algorithm: profile[V37_RECTANGULAR_ALGORITHM_OFFSET]
+            & V37_RIGHT_RECTANGULAR_ALGORITHM_MASK
             != 0,
         left_curve: read_curve(profile, V37_LEFT_DEFAULT_CURVE_OFFSET, "left")?,
         right_curve: read_curve(profile, V37_RIGHT_DEFAULT_CURVE_OFFSET, "right")?,
@@ -404,20 +404,20 @@ pub fn set_controller_settings(
     if profile.len() != V37_PROFILE_LENGTH {
         return Err("expected a 484-byte v37 profile".into());
     }
-    for (offset, enabled) in [
+    for (mask, enabled) in [
         (
-            V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET,
+            V37_LEFT_RECTANGULAR_ALGORITHM_MASK,
             left_rectangle_algorithm,
         ),
         (
-            V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET,
+            V37_RIGHT_RECTANGULAR_ALGORITHM_MASK,
             right_rectangle_algorithm,
         ),
     ] {
         if enabled {
-            profile[offset] |= V37_RECTANGULAR_ALGORITHM_MASK;
+            profile[V37_RECTANGULAR_ALGORITHM_OFFSET] |= mask;
         } else {
-            profile[offset] &= !V37_RECTANGULAR_ALGORITHM_MASK;
+            profile[V37_RECTANGULAR_ALGORITHM_OFFSET] &= !mask;
         }
     }
 
@@ -1179,14 +1179,18 @@ mod tests {
     #[test]
     fn reads_and_updates_known_controller_settings() {
         let mut profile = profile();
-        profile[V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET] = 0x80;
-        profile[V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET] = 0x40 | V37_RECTANGULAR_ALGORITHM_MASK;
+        profile[V37_RECTANGULAR_ALGORITHM_OFFSET] = 0x80 | V37_RIGHT_RECTANGULAR_ALGORITHM_MASK;
+        profile[0x00d] = 0x10;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET] = 1;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 1] = 0x20;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 8] = 0x61;
         profile[V37_LEFT_DEFAULT_CURVE_OFFSET + 0x0A] = 0x12;
         profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 1] = 0x20;
         profile[V37_RIGHT_DEFAULT_CURVE_OFFSET + 8] = 0x61;
+
+        let initial_settings = controller_settings(&profile).unwrap();
+        assert!(!initial_settings.left_rectangle_algorithm);
+        assert!(initial_settings.right_rectangle_algorithm);
 
         set_controller_settings(
             &mut profile,
@@ -1221,8 +1225,8 @@ mod tests {
         let settings = controller_settings(&profile).unwrap();
         assert!(settings.left_rectangle_algorithm);
         assert!(!settings.right_rectangle_algorithm);
-        assert_eq!(profile[V37_LEFT_RECTANGULAR_ALGORITHM_OFFSET], 0x90);
-        assert_eq!(profile[V37_RIGHT_RECTANGULAR_ALGORITHM_OFFSET], 0x40);
+        assert_eq!(profile[V37_RECTANGULAR_ALGORITHM_OFFSET], 0x81);
+        assert_eq!(profile[0x00d], 0x10);
         assert_eq!(settings.left_curve.center, -13);
         assert_eq!(settings.left_curve.point1_x, 40);
         assert_eq!(settings.left_curve.point1_y, 29);

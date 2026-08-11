@@ -16,7 +16,13 @@ import {
   updateMacroHeader,
   updateMacroStep,
 } from "../domain/macro";
-import type { MacroSlotSummary, MacroStep, MacroSummary } from "../models";
+import type {
+  MacroCommitInput,
+  MacroSlotSummary,
+  MacroStep,
+  MacroSummary,
+  MacroWriteResult,
+} from "../models";
 
 type MacroEditorHost = {
   getDevicePath: () => string | null;
@@ -30,8 +36,9 @@ export type MacroEditor = {
   setup: () => void;
   syncActions: () => void;
   isDirty: () => boolean;
+  readDraft: () => MacroCommitInput | null;
+  markSaved: (result: MacroWriteResult) => void;
   reset: () => void;
-  save: () => Promise<void>;
 };
 
 export function createMacroEditor(host: MacroEditorHost): MacroEditor {
@@ -284,6 +291,16 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     host.syncHostActions();
   }
 
+  function readDraft(): MacroCommitInput | null {
+    if (draftRecord === null || originalRecord === null) return null;
+    draftRecord = updateHeaderFromControls(draftRecord);
+    return {
+      slot: selectedSlot,
+      rawRecord: draftRecord.slice(),
+      originalRecord: originalRecord.slice(),
+    };
+  }
+
   function renderSummary(nextSummary: MacroSummary): void {
     summary = nextSummary;
     const currentSlot = Number(byId<HTMLSelectElement>("macro-slot").value);
@@ -318,17 +335,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     }
   }
 
-  async function save(): Promise<void> {
-    if (!isDirty()) return;
-    const path = host.getDevicePath();
-    if (!path) {
-      throw new Error("マクロを保存するにはコントローラーを接続してください。");
-    }
-    if (!draftRecord) return;
-
-    const record = updateHeaderFromControls(draftRecord);
-    draftRecord = record;
-    const result = await backend.writeMacro(path, selectedSlot, record);
+  function markSaved(result: MacroWriteResult): void {
     const savedRecord = result.slot.rawRecord.slice();
     originalRecord = savedRecord.slice();
     draftRecord = savedRecord.slice();
@@ -377,5 +384,5 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     }
   }
 
-  return { setup, syncActions, isDirty, reset, save };
+  return { setup, syncActions, isDirty, readDraft, markSaved, reset };
 }

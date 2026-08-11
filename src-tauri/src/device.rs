@@ -36,6 +36,14 @@ pub struct ProfileSummary {
     pub raw_profile: Vec<u8>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingChange {
+    pub label: String,
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyProfileResult {
@@ -163,14 +171,14 @@ pub struct DeviceSettingsSummary {
     step_accuracy: StepAccuracySummary,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSettingsInput {
     polling_rate: u8,
     step_accuracy: StepAccuracyInput,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepAccuracyInput {
     mode: u8,
@@ -330,6 +338,453 @@ pub fn update_controller_settings(
     build_profile_summary(profile, None)
 }
 
+pub fn profile_changes(before: &[u8], after: &[u8]) -> Result<Vec<SettingChange>, String> {
+    let before = protocol::normalize_v37_profile(before)?;
+    let after = protocol::normalize_v37_profile(after)?;
+    let before_settings = protocol::controller_settings(&before)?;
+    let after_settings = protocol::controller_settings(&after)?;
+    let before_vibration = protocol::vibration_settings(&before)?;
+    let after_vibration = protocol::vibration_settings(&after)?;
+    let mut changes = Vec::new();
+
+    add_change(
+        &mut changes,
+        "左スティック / 矩形アルゴリズム",
+        boolean_value(before_settings.left_rectangle_algorithm),
+        boolean_value(after_settings.left_rectangle_algorithm),
+    );
+    add_change(
+        &mut changes,
+        "右スティック / 矩形アルゴリズム",
+        boolean_value(before_settings.right_rectangle_algorithm),
+        boolean_value(after_settings.right_rectangle_algorithm),
+    );
+    add_curve_changes(
+        &mut changes,
+        "左スティック",
+        before_settings.left_curve,
+        after_settings.left_curve,
+    );
+    add_curve_changes(
+        &mut changes,
+        "右スティック",
+        before_settings.right_curve,
+        after_settings.right_curve,
+    );
+
+    for (index, (before_entry, after_entry)) in before_settings
+        .key_bindings
+        .iter()
+        .zip(after_settings.key_bindings.iter())
+        .enumerate()
+    {
+        if before_entry != after_entry {
+            let label = KEYMAP_SLOT_LABELS.get(index).copied().unwrap_or("スロット");
+            add_change(
+                &mut changes,
+                &format!("キーバインド / {label}"),
+                keymap_value(before_entry, index),
+                keymap_value(after_entry, index),
+            );
+        }
+    }
+
+    add_change(
+        &mut changes,
+        "連射 / 速度",
+        rapid_fire_speed_value(before_settings.rapid_fire.speed_index),
+        rapid_fire_speed_value(after_settings.rapid_fire.speed_index),
+    );
+    for (index, (before_value, after_value)) in before_settings
+        .rapid_fire
+        .keys
+        .iter()
+        .zip(after_settings.rapid_fire.keys.iter())
+        .enumerate()
+    {
+        if before_value != after_value {
+            let label = KEYMAP_SLOT_LABELS.get(index).copied().unwrap_or("スロット");
+            add_change(
+                &mut changes,
+                &format!("連射 / {label}"),
+                optional_boolean_value(*before_value),
+                optional_boolean_value(*after_value),
+            );
+        }
+    }
+
+    add_change(
+        &mut changes,
+        "振動 / 左グリップ / 最小",
+        before_vibration.left.min,
+        after_vibration.left.min,
+    );
+    add_change(
+        &mut changes,
+        "振動 / 左グリップ / 最大",
+        before_vibration.left.max,
+        after_vibration.left.max,
+    );
+    add_change(
+        &mut changes,
+        "振動 / 右グリップ / 最小",
+        before_vibration.right.min,
+        after_vibration.right.min,
+    );
+    add_change(
+        &mut changes,
+        "振動 / 右グリップ / 最大",
+        before_vibration.right.max,
+        after_vibration.right.max,
+    );
+
+    Ok(changes)
+}
+
+pub fn device_settings_changes(
+    before: &DeviceSettingsInput,
+    after: &DeviceSettingsInput,
+) -> Vec<SettingChange> {
+    let mut changes = Vec::new();
+    add_change(
+        &mut changes,
+        "デバイス設定 / ポーリングレート",
+        polling_rate_value(before.polling_rate),
+        polling_rate_value(after.polling_rate),
+    );
+    if before.step_accuracy.mode != after.step_accuracy.mode
+        || before.step_accuracy.value != after.step_accuracy.value
+    {
+        add_change(
+            &mut changes,
+            "デバイス設定 / ステップ精度",
+            step_accuracy_value(&before.step_accuracy),
+            step_accuracy_value(&after.step_accuracy),
+        );
+    }
+    add_change(
+        &mut changes,
+        "デバイス設定 / ステップ精度拡張",
+        before.step_accuracy.extension,
+        after.step_accuracy.extension,
+    );
+    changes
+}
+
+pub fn validate_device_settings(input: &DeviceSettingsInput) -> Result<(), String> {
+    if !matches!(input.polling_rate, 0..=3) {
+        return Err(format!(
+            "polling rate code {} is not supported",
+            input.polling_rate
+        ));
+    }
+    if input.step_accuracy.mode == 1 && !matches!(input.step_accuracy.value, 32 | 64 | 128 | 256) {
+        return Err(format!(
+            "step accuracy value {} is not supported",
+            input.step_accuracy.value
+        ));
+    }
+    if !matches!(input.step_accuracy.mode, 0 | 1) {
+        return Err(format!(
+            "step accuracy mode {} is not supported",
+            input.step_accuracy.mode
+        ));
+    }
+    Ok(())
+}
+
+const KEYMAP_SLOT_LABELS: &[&str] = &[
+    "A",
+    "B",
+    "予約/未割当",
+    "X",
+    "Y",
+    "予約/未割当",
+    "LB",
+    "RB",
+    "LT",
+    "RT",
+    "View",
+    "Menu",
+    "予約/未割当",
+    "L3",
+    "R3",
+    "Share",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "動的/未割当",
+    "動的/未割当",
+    "動的/未割当",
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "動的/未割当",
+    "動的/未割当",
+    "動的/未割当",
+    "動的/未割当",
+    "動的/未割当",
+];
+
+const KEYMAP_TARGET_LABELS: &[&str] = &[
+    "A",
+    "B",
+    "C",
+    "X",
+    "Y",
+    "Z",
+    "L1",
+    "R1",
+    "L2",
+    "R2",
+    "SELECT / View",
+    "START / Menu",
+    "HOME",
+    "L3",
+    "R3",
+    "CAPTURE / Share",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "Back",
+    "Mode",
+    "Menu",
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5",
+    "M6",
+    "M7",
+    "M8",
+    "POWER",
+];
+
+fn add_change<B: ToString, A: ToString>(
+    changes: &mut Vec<SettingChange>,
+    label: &str,
+    before: B,
+    after: A,
+) {
+    let before = before.to_string();
+    let after = after.to_string();
+    if before != after {
+        changes.push(SettingChange {
+            label: label.to_string(),
+            before,
+            after,
+        });
+    }
+}
+
+fn add_curve_changes(
+    changes: &mut Vec<SettingChange>,
+    stick_label: &str,
+    before: protocol::CurveSettings,
+    after: protocol::CurveSettings,
+) {
+    add_change(
+        changes,
+        &format!("{stick_label} / センター"),
+        before.center,
+        after.center,
+    );
+    add_change(
+        changes,
+        &format!("{stick_label} / ポイント1 X"),
+        before.point1_x,
+        after.point1_x,
+    );
+    add_change(
+        changes,
+        &format!("{stick_label} / ポイント1 Y"),
+        before.point1_y,
+        after.point1_y,
+    );
+    add_change(
+        changes,
+        &format!("{stick_label} / ポイント2 X"),
+        before.point2_x,
+        after.point2_x,
+    );
+    add_change(
+        changes,
+        &format!("{stick_label} / ポイント2 Y"),
+        before.point2_y,
+        after.point2_y,
+    );
+    add_change(
+        changes,
+        &format!("{stick_label} / エッジ"),
+        before.edge,
+        after.edge,
+    );
+    add_change(
+        changes,
+        &format!("{stick_label} / 安定化"),
+        signed_stabilization(before.stabilization),
+        signed_stabilization(after.stabilization),
+    );
+}
+
+fn boolean_value(value: bool) -> &'static str {
+    if value { "有効" } else { "無効" }
+}
+
+fn optional_boolean_value(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "有効",
+        Some(false) => "無効",
+        None => "不明",
+    }
+}
+
+fn rapid_fire_speed_value(value: Option<u8>) -> &'static str {
+    match value {
+        Some(0) => "遅い（5回/秒）",
+        Some(1) => "標準（10回/秒）",
+        Some(2) => "速い（20回/秒）",
+        Some(_) | None => "不明",
+    }
+}
+
+fn polling_rate_value(value: u8) -> String {
+    match value {
+        2 => "250 Hz".to_string(),
+        1 => "500 Hz".to_string(),
+        0 => "1000 Hz".to_string(),
+        3 => "2000 Hz".to_string(),
+        _ => "不明".to_string(),
+    }
+}
+
+fn step_accuracy_value(value: &StepAccuracyInput) -> String {
+    match (value.mode, value.value) {
+        (0, _) => "アダプティブ".to_string(),
+        (1, 32 | 64 | 128 | 256) => value.value.to_string(),
+        _ => "不明".to_string(),
+    }
+}
+
+fn keymap_value(entry: &[u8; 4], source_slot: usize) -> String {
+    if entry.iter().all(|value| *value == 0) {
+        return format!(
+            "{}（標準）",
+            KEYMAP_SLOT_LABELS
+                .get(source_slot)
+                .copied()
+                .unwrap_or("標準")
+        );
+    }
+    if entry[0] == 0x01 {
+        if entry[1] == 0xff {
+            return "なし".to_string();
+        }
+        return KEYMAP_TARGET_LABELS
+            .get(usize::from(entry[1]))
+            .copied()
+            .unwrap_or("未設定")
+            .to_string();
+    }
+    if entry[0] == 0x02 {
+        let Some(primary) = keyboard_key_label(entry[2]) else {
+            return "キーボード設定".to_string();
+        };
+        let mut keys = vec![primary];
+        if entry[3] != 0 {
+            let Some(second) = keyboard_key_label(entry[3]) else {
+                return "キーボード設定".to_string();
+            };
+            keys.push(second);
+        }
+        let Some(modifier) = keyboard_modifier_label(entry[1]) else {
+            return "キーボード設定".to_string();
+        };
+        if modifier == "None" {
+            return keys.join(" + ");
+        }
+        return format!("{modifier} + {}", keys.join(" + "));
+    }
+    "未設定".to_string()
+}
+
+fn keyboard_key_label(usage: u8) -> Option<String> {
+    if (0x04..=0x1d).contains(&usage) {
+        return Some(char::from(b'A' + usage - 0x04).to_string());
+    }
+    if (0x1e..=0x26).contains(&usage) {
+        return Some(char::from(b'1' + usage - 0x1e).to_string());
+    }
+    if usage == 0x27 {
+        return Some("0".into());
+    }
+    if (0x3a..=0x45).contains(&usage) {
+        return Some(format!("F{}", usage - 0x3a + 1));
+    }
+    if (0x59..=0x61).contains(&usage) {
+        return Some(format!("Num{}", usage - 0x59 + 1));
+    }
+    if usage == 0x62 {
+        return Some("Num0".into());
+    }
+    let label = match usage {
+        0x35 => "~",
+        0x29 => "Esc",
+        0x2b => "Tab",
+        0x2c => "Space",
+        0x39 => "Caps Lock",
+        0x28 => "Enter",
+        0x50 => "Left",
+        0x4f => "Right",
+        0x52 => "Up",
+        0x51 => "Down",
+        0x46 => "Print Screen",
+        0xe0 => "L Ctrl",
+        0xe1 => "L Shift",
+        0xe2 => "L Alt",
+        0xe3 => "L Win",
+        0xe4 => "R Ctrl",
+        0xe5 => "R Shift",
+        0xe6 => "R Alt",
+        0xe7 => "R Win",
+        0x49 => "Insert",
+        0x4c => "Delete",
+        0x4a => "Home",
+        0x4d => "End",
+        0x4b => "Page Up",
+        0x4e => "Page Down",
+        0x2d => "-",
+        0x2e => "+",
+        0x2a => "Backspace",
+        0x2f => "[",
+        0x30 => "]",
+        0x31 => "\\",
+        0x33 => ";",
+        0x34 => "'",
+        0x36 => ",",
+        0x37 => ".",
+        0x38 => "/",
+        _ => return None,
+    };
+    Some(label.to_string())
+}
+
+fn keyboard_modifier_label(value: u8) -> Option<&'static str> {
+    match value {
+        0x00 => Some("None"),
+        0x01 => Some("L Ctrl"),
+        0x02 => Some("L Shift"),
+        0x04 => Some("L Alt"),
+        0x10 => Some("R Ctrl"),
+        0x20 => Some("R Shift"),
+        0x40 => Some("R Alt"),
+        _ => None,
+    }
+}
+
 pub fn read_device_settings(expected_device_path: &str) -> Result<DeviceSettingsSummary, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
@@ -356,6 +811,7 @@ pub fn set_device_settings(
     expected_device_path: &str,
     input: DeviceSettingsInput,
 ) -> Result<DeviceSettingsWriteResult, String> {
+    validate_device_settings(&input)?;
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
     let device_summary = summary(info);
@@ -843,8 +1299,25 @@ fn parse_key_bindings(
             *byte = u8::from_str_radix(&compact[start..start + 2], 16)
                 .map_err(|_| format!("invalid key binding {}", index + 1))?;
         }
+        validate_key_binding(&bindings[index], index)?;
     }
     Ok(bindings)
+}
+
+fn validate_key_binding(entry: &[u8; 4], index: usize) -> Result<(), String> {
+    let valid = match entry[0] {
+        0x00 => entry.iter().all(|value| *value == 0),
+        0x01 => entry[1] == 0xff || entry[1] < protocol::V37_KEYMAP_ENTRY_COUNT as u8,
+        0x02 => matches!(entry[1], 0x00 | 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x40) && entry[2] != 0,
+        _ => false,
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(format!(
+        "key binding {} contains an unsupported mapping",
+        index + 1
+    ))
 }
 
 #[cfg(test)]
@@ -978,6 +1451,73 @@ mod tests {
     fn rejects_stabilization_outside_official_range() {
         assert!(curve_input(-11).into_curve("left").is_err());
         assert!(curve_input(11).into_curve("left").is_err());
+    }
+
+    #[test]
+    fn validates_keymap_mapping_types() {
+        let valid = vec![
+            "00000000".to_string(),
+            "0102FFFF".to_string(),
+            "01FFFFFF".to_string(),
+            "02000400".to_string(),
+        ];
+        assert!(
+            parse_key_bindings(
+                valid
+                    .into_iter()
+                    .chain(std::iter::repeat("00000000".to_string()))
+                    .take(protocol::V37_KEYMAP_ENTRY_COUNT)
+                    .collect(),
+            )
+            .is_ok()
+        );
+
+        let invalid = vec![
+            "03000000".to_string(),
+            "00000001".to_string(),
+            "02030004".to_string(),
+        ];
+        for entry in invalid {
+            let values = std::iter::once(entry)
+                .chain(std::iter::repeat("00000000".to_string()))
+                .take(protocol::V37_KEYMAP_ENTRY_COUNT)
+                .collect();
+            assert!(parse_key_bindings(values).is_err());
+        }
+    }
+
+    #[test]
+    fn validates_device_settings_values() {
+        let mut settings = DeviceSettingsInput {
+            polling_rate: 0,
+            step_accuracy: StepAccuracyInput {
+                mode: 1,
+                value: 64,
+                extension: 0,
+            },
+        };
+        assert!(validate_device_settings(&settings).is_ok());
+        settings.step_accuracy.value = 12;
+        assert!(validate_device_settings(&settings).is_err());
+        settings.step_accuracy.value = 64;
+        settings.step_accuracy.mode = 2;
+        assert!(validate_device_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn reports_semantic_profile_changes_without_wire_bytes() {
+        let before = protocol::new_v37_profile();
+        let mut after = before.clone();
+        after[protocol::V37_KEYMAP_OFFSET..protocol::V37_KEYMAP_OFFSET + 4]
+            .copy_from_slice(&[0x02, 0x00, 0x04, 0x00]);
+        let crc = protocol::profile_crc(&after).unwrap();
+        after[..2].copy_from_slice(&crc.to_be_bytes());
+
+        let changes = profile_changes(&before, &after).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].label, "キーバインド / A");
+        assert_eq!(changes[0].before, "A（標準）");
+        assert_eq!(changes[0].after, "A");
     }
 }
 
