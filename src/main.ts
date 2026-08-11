@@ -173,12 +173,22 @@ const macroEditor = createMacroEditor({
 const keymapEditor = createKeymapEditor({ markDirty: markSettingsDirty });
 
 const inputDiagnostics = createInputDiagnostics({
-  getDeviceName: () => deviceSession?.device.product ?? null,
-  getStickSettings: (stick) => {
-    const settings = readSettingsInput();
+  getDeviceIdentifiers: () => {
+    const device = deviceSession?.device;
+    return device ? [device.product, device.vendorProduct] : [];
+  },
+  getStickSettings: () => {
+    syncActiveCurveDraft();
+    syncActiveRectangleAlgorithm();
     return {
-      curve: settings[stick],
-      circularAlgorithm: settings.rectangleAlgorithm[stick],
+      leftStick: {
+        curve: curveDrafts.leftStick,
+        circularAlgorithm: rectangleAlgorithmDraft.leftStick,
+      },
+      rightStick: {
+        curve: curveDrafts.rightStick,
+        circularAlgorithm: rectangleAlgorithmDraft.rightStick,
+      },
     };
   },
   measurePollingRate: async () => {
@@ -269,13 +279,6 @@ function commitCurveDirectInput(id: string) {
   markSettingsDirty();
 }
 
-function cloneVibration(settings: VibrationSettings): VibrationSettings {
-  return {
-    left: { ...settings.left },
-    right: { ...settings.right },
-  };
-}
-
 function vibrationEqual(left: VibrationSettings, right: VibrationSettings): boolean {
   return left.left.min === right.left.min
     && left.left.max === right.left.max
@@ -352,7 +355,7 @@ function setVibrationControls(settings: VibrationSettings) {
 
 function applyVibrationMode(mode: VibrationMode) {
   if (mode !== "custom") {
-    setVibrationControls(cloneVibration(VIBRATION_PRESETS[mode]));
+    setVibrationControls(VIBRATION_PRESETS[mode]);
     return;
   }
   const current = readVibrationSettings();
@@ -511,14 +514,11 @@ function selectStick(stick: Stick) {
   byId("stick-right-tab").classList.toggle("active", !left);
   byId("stick-left-tab").setAttribute("aria-selected", String(left));
   byId("stick-right-tab").setAttribute("aria-selected", String(!left));
-  updateCurvePreview();
 }
 
 function readSettingsInput(): ControllerSettingsInput {
   syncActiveCurveDraft();
   syncActiveRectangleAlgorithm();
-  curveDrafts.leftStick = constrainCurve(curveDrafts.leftStick);
-  curveDrafts.rightStick = constrainCurve(curveDrafts.rightStick);
   return {
     rectangleAlgorithm: { ...rectangleAlgorithmDraft },
     leftStick: { ...curveDrafts.leftStick },
@@ -645,7 +645,6 @@ function renderControllerSettings(profile: ProfileSummary) {
   settingsDirty = false;
   byId("curve-dirty").hidden = true;
   byId("settings-dirty").hidden = true;
-  updateCurvePreview();
 }
 
 function renderVibrationSettings(profile: ProfileSummary) {
@@ -835,15 +834,19 @@ function renderProfileLibrary() {
     return;
   }
 
-  const sorted = [...profileList].sort((left, right) => {
-    const leftMatch = profileMatchesDevice(left) ? 1 : 0;
-    const rightMatch = profileMatchesDevice(right) ? 1 : 0;
-    if (leftMatch !== rightMatch) return rightMatch - leftMatch;
-    return right.id - left.id;
-  });
-  for (const entry of sorted) {
-    const matchesDevice = profileMatchesDevice(entry);
-    const active = profileIsActive(entry);
+  const sorted = profileList
+    .map((entry) => ({
+      entry,
+      matchesDevice: profileMatchesDevice(entry),
+      active: profileIsActive(entry),
+    }))
+    .sort((left, right) => {
+      if (left.matchesDevice !== right.matchesDevice) {
+        return (right.matchesDevice ? 1 : 0) - (left.matchesDevice ? 1 : 0);
+      }
+      return right.entry.id - left.entry.id;
+    });
+  for (const { entry, matchesDevice, active } of sorted) {
     const card = document.createElement("article");
     card.className = "profile-card";
     card.classList.toggle("profile-card-matched", matchesDevice);
@@ -1046,6 +1049,7 @@ function setKnownActiveProfile(rawProfile: readonly number[], session: DeviceSes
 async function scan() {
   let deviceSettingsError: unknown = null;
   let profilesPromise: Promise<void>;
+  let deviceSettingsPromise: Promise<void> = Promise.resolve();
   setBusy(true);
   try {
     setConnection(await backend.scanDevice());
@@ -1054,14 +1058,15 @@ async function scan() {
     activeProfileState = deviceSession ? "unknown" : "known";
     if (deviceSession) {
       restoreRememberedActiveProfile(deviceSession);
-      try {
-        applyDeviceSettings(await fetchDeviceSettings(deviceSession.device.path));
-      } catch (error) {
-        deviceSettingsError = error;
-        currentDeviceSettings = null;
-        deviceSettingsDirty = false;
-        byId("device-dirty").hidden = true;
-      }
+      deviceSettingsPromise = backend
+        .readDeviceSettings(deviceSession.device.path)
+        .then(applyDeviceSettings)
+        .catch((error: unknown) => {
+          deviceSettingsError = error;
+          currentDeviceSettings = null;
+          deviceSettingsDirty = false;
+          byId("device-dirty").hidden = true;
+        });
     }
     profilesPromise = refreshProfiles();
   } catch (error) {
@@ -1075,7 +1080,7 @@ async function scan() {
     return;
   }
   try {
-    await profilesPromise;
+    await Promise.all([profilesPromise, deviceSettingsPromise]);
     showView("home");
     if (deviceSettingsError) {
       showError(`デバイス設定を読み込めませんでした: ${errorMessage(deviceSettingsError)}`);
@@ -1260,10 +1265,6 @@ function applyDeviceSettings(settings: DeviceSettings) {
   deviceSettingsDirty = false;
   byId("device-dirty").hidden = true;
   syncActions();
-}
-
-async function fetchDeviceSettings(devicePath: string): Promise<DeviceSettings> {
-  return backend.readDeviceSettings(devicePath);
 }
 
 function buildCommitProfileInput(

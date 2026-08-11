@@ -51,10 +51,31 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     return left.length === right.length && left.every((value, index) => value === right[index]);
   }
 
+  function headerControlsDiffer(record: readonly number[]): boolean {
+    const mKey = Number(byId<HTMLSelectElement>("macro-m-key-select").value);
+    const runKey = Number(byId<HTMLSelectElement>("macro-run-key-select").value);
+    const repeat = Number(byId<HTMLInputElement>("macro-repeat").value);
+    if (!Number.isInteger(mKey) || mKey < 0 || mKey > 0xff
+      || !Number.isInteger(runKey) || runKey < 0 || runKey > 0xff
+      || !Number.isInteger(repeat) || repeat < 0 || repeat > 0xffff) {
+      return true;
+    }
+    const flags = (byId<HTMLInputElement>("macro-run-after-release").checked ? 1 : 0)
+      | (byId<HTMLInputElement>("macro-loop").checked ? 2 : 0);
+    return record[5] !== mKey
+      || record[6] !== runKey
+      || (((record[7] ?? 0) & 0x03) !== flags)
+      || record[8] !== (repeat >> 8)
+      || record[9] !== (repeat & 0xff);
+  }
+
   function isDirty(): boolean {
-    return draftRecord !== null
-      && originalRecord !== null
-      && !recordsEqual(draftRecord, originalRecord);
+    if (draftRecord === null || originalRecord === null) return false;
+    return !recordsEqual(draftRecord, originalRecord) || headerControlsDiffer(draftRecord);
+  }
+
+  function confirmDiscardChanges(message: string): boolean {
+    return !isDirty() || window.confirm(`${message}\n編集中の変更を破棄しますか？`);
   }
 
   function reset(): void {
@@ -269,9 +290,15 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     host.syncHostActions();
   }
 
-  function selectSlot(slot: number): void {
+  function selectSlot(slot: number, confirmDiscard = true): void {
     const selected = summary?.slots.find((entry) => entry.slot === slot);
     if (!selected) return;
+    if (slot !== selectedSlot && confirmDiscard && !confirmDiscardChanges(
+      "スロットを切り替えると、編集中のマクロ変更が失われます。",
+    )) {
+      byId<HTMLSelectElement>("macro-slot").value = String(selectedSlot);
+      return;
+    }
     selectedSlot = slot;
     byId<HTMLSelectElement>("macro-slot").value = String(slot);
     byId("macro-editor-title").textContent = `スロット ${slot + 1} の編集`;
@@ -301,7 +328,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     };
   }
 
-  function renderSummary(nextSummary: MacroSummary): void {
+  function renderSummary(nextSummary: MacroSummary, confirmDiscard = true): void {
     summary = nextSummary;
     const currentSlot = Number(byId<HTMLSelectElement>("macro-slot").value);
     byId("macro-slots").replaceChildren(
@@ -315,16 +342,17 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
         return button;
       }),
     );
-    selectSlot(nextSummary.slots.some((slot) => slot.slot === currentSlot) ? currentSlot : 0);
+    selectSlot(nextSummary.slots.some((slot) => slot.slot === currentSlot) ? currentSlot : 0, confirmDiscard);
     byId("macro-output").textContent = "読み込み完了。編集するスロットを選択してください。";
   }
 
   async function refresh(): Promise<void> {
     const path = host.getDevicePath();
     if (!path) return;
+    if (!confirmDiscardChanges("再読み込みすると、編集中のマクロ変更が失われます。")) return;
     host.setBusy(true);
     try {
-      renderSummary(await backend.readMacros(path));
+      renderSummary(await backend.readMacros(path), false);
     } catch (error) {
       const message = errorMessage(error);
       byId("macro-output").textContent = message;

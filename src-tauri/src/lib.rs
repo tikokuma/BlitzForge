@@ -1,3 +1,5 @@
+#![allow(linker_messages)]
+
 mod device;
 mod profiles;
 mod protocol;
@@ -218,10 +220,8 @@ async fn list_profiles(
             entry.active = same_device_uuid(
                 &entry.device_uuid,
                 query.device_uuid.as_deref().unwrap_or_default(),
-            ) && serde_json::from_str::<Vec<u8>>(&entry.snapshot.config_json)
-                .ok()
-                .and_then(|profile| protocol::normalize_v37_profile(&profile).ok())
-                .is_some_and(|profile| profile == active_profile);
+            ) && entry.normalized_profile.as_deref()
+                == Some(active_profile.as_slice());
         }
         Ok(entries)
     })
@@ -468,7 +468,11 @@ fn prepare_commit(input: &mut CommitProfileInput) -> Result<PreparedCommit, Stri
         );
     }
 
-    let mut changes = device::profile_changes(&baseline, &candidate)?;
+    let mut changes = if candidate == baseline {
+        Vec::new()
+    } else {
+        device::profile_changes(&baseline, &candidate)?
+    };
     if input.profile.id.is_none() {
         changes.insert(
             0,

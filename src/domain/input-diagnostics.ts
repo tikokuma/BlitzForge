@@ -11,10 +11,9 @@ export type DiagnosticSample = {
     rightStick: StickPoint;
     buttons: readonly boolean[];
   };
-  processed: {
+  simulation: {
     leftStick: StickPoint;
     rightStick: StickPoint;
-    buttons: readonly boolean[];
   };
 };
 
@@ -28,29 +27,25 @@ function interpolate(fromX: number, fromY: number, toX: number, toY: number, x: 
 }
 
 /**
- * Evaluates the same four-point radial response shape used by the curve preview.
- * The firmware uses the same scalar gain for both axes, so this intentionally
- * does not process X and Y independently.
+ * Approximates the four-point radial response shape used by the curve preview.
+ * This is a UI simulation, not the processed output reported by controller
+ * firmware.
  */
 export function evaluateStickCurve(radius: number, curve: CurveSettings): number {
   const centerCompensation = Math.max(0, -curve.center);
   const edgeCompensation = Math.max(0, -curve.edge);
-  const points = [
-    { x: 0, y: centerCompensation },
-    { x: clamp(curve.point1X, 0, 100), y: clamp(curve.point1Y, centerCompensation, 100 - edgeCompensation) },
-    { x: clamp(curve.point2X, 0, 100), y: clamp(curve.point2Y, centerCompensation, 100 - edgeCompensation) },
-    { x: 100, y: 100 - edgeCompensation },
-  ];
   const input = clamp(radius * 100, 0, 103);
-  let previous = points[0] ?? { x: 0, y: centerCompensation };
-  for (const next of points.slice(1)) {
-    if (input <= next.x) return interpolate(previous.x, previous.y, next.x, next.y, input);
-    previous = next;
-  }
-  return previous.y + (input - previous.x);
+  const point1X = clamp(curve.point1X, 0, 100);
+  const point1Y = clamp(curve.point1Y, centerCompensation, 100 - edgeCompensation);
+  const point2X = clamp(curve.point2X, 0, 100);
+  const point2Y = clamp(curve.point2Y, centerCompensation, 100 - edgeCompensation);
+  if (input <= point1X) return interpolate(0, centerCompensation, point1X, point1Y, input);
+  if (input <= point2X) return interpolate(point1X, point1Y, point2X, point2Y, input);
+  if (input <= 100) return interpolate(point2X, point2Y, 100, 100 - edgeCompensation, input);
+  return 100 - edgeCompensation + (input - 100);
 }
 
-export function processStickInput(
+export function simulateStickInput(
   raw: StickPoint,
   curve: CurveSettings,
   circularAlgorithm: boolean,

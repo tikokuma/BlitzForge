@@ -1,16 +1,19 @@
 import { byId } from "../dom";
 import {
-  processStickInput,
+  simulateStickInput,
   type DiagnosticSample,
   type StickPoint,
 } from "../domain/input-diagnostics";
-import type { CurveSettings, PollingMeasurement, Stick } from "../models";
+import type { CurveSettings, PollingMeasurement } from "../models";
 
 type DiagnosticTab = "viewer" | "polling";
 
 type InputDiagnosticsOptions = {
-  getDeviceName: () => string | null;
-  getStickSettings: (stick: Stick) => { curve: CurveSettings; circularAlgorithm: boolean };
+  getDeviceIdentifiers: () => readonly string[];
+  getStickSettings: () => {
+    leftStick: { curve: CurveSettings; circularAlgorithm: boolean };
+    rightStick: { curve: CurveSettings; circularAlgorithm: boolean };
+  };
   measurePollingRate: () => Promise<PollingMeasurement>;
 };
 
@@ -33,6 +36,15 @@ const formatMs = (value: number): string => value > 0 ? `${formatNumber(value, 2
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, Number.isFinite(value) ? value : 0));
 
+const GRID_RINGS = [0.5, 1] as const;
+const POLLING_DISPLAY_SAMPLE_COUNT = 5;
+
+function addPollingDisplaySample(samples: number[], value: number): number {
+  samples.push(value);
+  if (samples.length > POLLING_DISPLAY_SAMPLE_COUNT) samples.shift();
+  return samples.reduce((total, sample) => total + sample, 0) / samples.length;
+}
+
 function readAxis(gamepad: Gamepad, index: number): number {
   return clamp(gamepad.axes[index] ?? 0, -1, 1);
 }
@@ -47,10 +59,30 @@ function readButtonState(gamepad: Gamepad): boolean[] {
 
 type GamepadNavigator = { getGamepads?: () => ArrayLike<Gamepad | null> };
 
-function getConnectedGamepads(): Gamepad[] {
+function readGamepads(): ArrayLike<Gamepad | null> | null {
   const getGamepads = (navigator as unknown as GamepadNavigator).getGamepads;
-  if (typeof getGamepads !== "function") return [];
-  return Array.from(getGamepads.call(navigator)).filter((gamepad): gamepad is Gamepad => gamepad?.connected === true);
+  return typeof getGamepads === "function" ? getGamepads.call(navigator) : null;
+}
+
+function normalizeGamepadName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function gamepadMatchesIdentifier(gamepad: Gamepad, identifier: string): boolean {
+  const normalizedId = normalizeGamepadName(gamepad.id);
+  const normalizedIdentifier = normalizeGamepadName(identifier);
+  if (normalizedId.length === 0 || normalizedIdentifier.length < 3) return false;
+
+  const hexadecimalParts = identifier.match(/[0-9a-f]{4}/gi) ?? [];
+  if (hexadecimalParts.length >= 2) {
+    return hexadecimalParts.every((part) => normalizedId.includes(part.toLowerCase()));
+  }
+  return normalizedId.includes(normalizedIdentifier);
+}
+
+function gamepadHasInput(gamepad: Gamepad): boolean {
+  return gamepad.axes.some((axis) => Math.abs(axis) > 0.02)
+    || gamepad.buttons.some((button) => button.pressed || button.value > 0.02);
 }
 
 function pointFromGamepad(gamepad: Gamepad, xAxis: number, yAxis: number): StickPoint {
@@ -90,7 +122,7 @@ function drawGrid(context: CanvasRenderingContext2D, width: number, height: numb
   context.moveTo(centerX, centerY - radius);
   context.lineTo(centerX, centerY + radius);
   context.stroke();
-  for (const ring of [0.5, 1]) {
+  for (const ring of GRID_RINGS) {
     context.beginPath();
     context.arc(centerX, centerY, radius * ring, 0, Math.PI * 2);
     context.strokeStyle = ring === 1 ? "#425267" : "#253140";
@@ -122,13 +154,13 @@ function drawPoint(
   context.stroke();
 }
 
-function drawStickPosition(canvas: HTMLCanvasElement, raw: StickPoint, processed: StickPoint): void {
+function drawStickPosition(canvas: HTMLCanvasElement, raw: StickPoint, simulation: StickPoint): void {
   const drawing = canvasContext(canvas);
   if (!drawing) return;
   const { context, width, height } = drawing;
   drawGrid(context, width, height);
   drawPoint(context, raw, width, height, "#f0a45f", 6);
-  drawPoint(context, processed, width, height, "#70a7ff", 5);
+  drawPoint(context, simulation, width, height, "#70a7ff", 5);
 }
 
 function drawPollingChart(canvas: HTMLCanvasElement, intervals: readonly number[]): void {
@@ -166,59 +198,116 @@ function drawPollingChart(canvas: HTMLCanvasElement, intervals: readonly number[
   context.fillText(`${formatMs(min)} – ${formatMs(max)}`, 10, height - 5);
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function createInputDiagnostics(options: InputDiagnosticsOptions) {
   let initialized = false;
   let visible = false;
   let currentTab: DiagnosticTab = "viewer";
   let currentSample: DiagnosticSample | null = null;
-  let lastProcessed: { leftStick: StickPoint; rightStick: StickPoint } | null = null;
+  let lastSimulation: { leftStick: StickPoint; rightStick: StickPoint } | null = null;
   let animationFrame: number | null = null;
   let pollingMeasurement: PollingMeasurement | null = null;
-  let pollingError: string | null = null;
+  let pollingRateDisplaySamples: number[] = [];
+  let averagePollingRateDisplaySamples: number[] = [];
+  let displayedPollingRate: number | null = null;
+  let displayedAveragePollingRate: number | null = null;
+  let smoothedMeasurement: PollingMeasurement | null = null;
   let pollingBusy = false;
   let pollingTimer: number | null = null;
   let pollingRequestId = 0;
+  let selectedGamepadIndex: number | null = null;
+  let buttonStateElements: HTMLSpanElement[] = [];
+
+  function isPollingViewActive(): boolean {
+    return visible && currentTab === "polling";
+  }
 
   function findGamepad(): Gamepad | null {
-    const gamepads = getConnectedGamepads();
-    if (gamepads.length === 0) return null;
-    const name = options.getDeviceName()?.trim().toLowerCase();
-    if (!name) return gamepads[0] ?? null;
-    return gamepads.find((gamepad) => gamepad.id.toLowerCase().includes(name)) ?? gamepads[0] ?? null;
+    const gamepads = readGamepads();
+    if (!gamepads) return null;
+
+    if (selectedGamepadIndex !== null) {
+      const selected = Array.prototype.find.call(
+        gamepads,
+        (gamepad: Gamepad | null): boolean => gamepad?.connected === true && gamepad.index === selectedGamepadIndex,
+      ) as Gamepad | undefined;
+      if (selected) return selected;
+      selectedGamepadIndex = null;
+    }
+
+    const connected = Array.prototype.filter.call(
+      gamepads,
+      (gamepad: Gamepad | null): gamepad is Gamepad => gamepad?.connected === true,
+    ) as Gamepad[];
+    if (connected.length === 0) return null;
+
+    const identifiers = options.getDeviceIdentifiers()
+      .map((identifier) => identifier.trim())
+      .filter((identifier) => identifier.length > 0);
+    const matches = connected.filter((gamepad) =>
+      identifiers.some((identifier) => gamepadMatchesIdentifier(gamepad, identifier)),
+    );
+    const activeMatches = matches.filter(gamepadHasInput);
+    const candidates = matches.length > 0 ? matches : connected;
+    const activeCandidates = candidates.filter(gamepadHasInput);
+    let selected: Gamepad | null = null;
+    if (matches.length === 1) selected = matches[0] ?? null;
+    else if (activeMatches.length === 1) selected = activeMatches[0] ?? null;
+    else if (connected.length === 1) selected = connected[0] ?? null;
+    else if (activeCandidates.length === 1) selected = activeCandidates[0] ?? null;
+    if (selected) selectedGamepadIndex = selected.index;
+    return selected ?? null;
   }
 
   function readSample(gamepad: Gamepad): DiagnosticSample {
     const rawLeft = pointFromGamepad(gamepad, 0, 1);
     const rawRight = pointFromGamepad(gamepad, 2, 3);
-    const leftSettings = options.getStickSettings("leftStick");
-    const rightSettings = options.getStickSettings("rightStick");
+    const settings = options.getStickSettings();
     const sample: DiagnosticSample = {
       raw: {
         leftStick: rawLeft,
         rightStick: rawRight,
         buttons: readButtonState(gamepad),
       },
-      processed: {
-        leftStick: processStickInput(rawLeft, leftSettings.curve, leftSettings.circularAlgorithm, lastProcessed?.leftStick ?? null),
-        rightStick: processStickInput(rawRight, rightSettings.curve, rightSettings.circularAlgorithm, lastProcessed?.rightStick ?? null),
-        buttons: readButtonState(gamepad),
+      simulation: {
+        leftStick: simulateStickInput(
+          rawLeft,
+          settings.leftStick.curve,
+          settings.leftStick.circularAlgorithm,
+          lastSimulation?.leftStick ?? null,
+        ),
+        rightStick: simulateStickInput(
+          rawRight,
+          settings.rightStick.curve,
+          settings.rightStick.circularAlgorithm,
+          lastSimulation?.rightStick ?? null,
+        ),
       },
     };
-    lastProcessed = {
-      leftStick: sample.processed.leftStick,
-      rightStick: sample.processed.rightStick,
+    lastSimulation = {
+      leftStick: sample.simulation.leftStick,
+      rightStick: sample.simulation.rightStick,
     };
     return sample;
   }
 
   function renderPolling(): void {
     if (pollingMeasurement) {
-      setText("diagnostics-polling-rate", formatHz(pollingMeasurement.pollingRate));
-      setText("diagnostics-polling-average", formatHz(pollingMeasurement.averagePollingRate));
+      if (smoothedMeasurement !== pollingMeasurement) {
+        smoothedMeasurement = pollingMeasurement;
+        displayedPollingRate = addPollingDisplaySample(
+          pollingRateDisplaySamples,
+          pollingMeasurement.pollingRate,
+        );
+        displayedAveragePollingRate = addPollingDisplaySample(
+          averagePollingRateDisplaySamples,
+          pollingMeasurement.averagePollingRate,
+        );
+      }
+      setText("diagnostics-polling-rate", formatHz(displayedPollingRate ?? pollingMeasurement.pollingRate));
+      setText(
+        "diagnostics-polling-average",
+        formatHz(displayedAveragePollingRate ?? pollingMeasurement.averagePollingRate),
+      );
       setText("diagnostics-polling-interval", formatMs(pollingMeasurement.reportInterval));
       setText("diagnostics-polling-min", formatMs(pollingMeasurement.minInterval));
       setText("diagnostics-polling-max", formatMs(pollingMeasurement.maxInterval));
@@ -231,47 +320,39 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
       ]) setText(id, "—");
       drawPollingChart(byId<HTMLCanvasElement>("diagnostics-polling-chart"), []);
     }
-    const status = byId("diagnostics-polling-status");
-    status.textContent = pollingError
-      ? `測定失敗: ${pollingError}`
-      : pollingMeasurement
-        ? "HID入力インターフェースの実測値"
-        : pollingBusy
-          ? "HID入力レポートを測定中…"
-          : "Polling Monitorを開くと測定を開始します";
-    status.dataset.kind = pollingError ? "error" : pollingMeasurement ? "success" : "";
   }
 
   function renderButtons(sample: DiagnosticSample | null): void {
     const container = byId("diagnostics-buttons");
-    if (container.childElementCount !== BUTTON_LABELS.length) {
-      container.replaceChildren(...BUTTON_LABELS.map((label) => {
+    if (buttonStateElements.length !== BUTTON_LABELS.length || container.childElementCount !== BUTTON_LABELS.length) {
+      buttonStateElements = BUTTON_LABELS.map((label) => {
         const item = document.createElement("span");
         item.className = "diagnostics-button-state";
         item.textContent = label;
         return item;
-      }));
+      });
+      container.replaceChildren(...buttonStateElements);
     }
-    Array.from(container.children).forEach((element, index) => {
-      element.classList.toggle("pressed", sample?.raw.buttons[index] ?? false);
-    });
+    for (let index = 0; index < buttonStateElements.length; index += 1) {
+      buttonStateElements[index]?.classList.toggle("pressed", sample?.raw.buttons[index] ?? false);
+    }
+  }
+
+  function renderStickReadout(prefix: string, raw: StickPoint): void {
+    setText(`diagnostics-${prefix}-raw-x`, formatNumber(raw.x, 3));
+    setText(`diagnostics-${prefix}-raw-y`, formatNumber(raw.y, 3));
   }
 
   function renderViewer(): void {
     const sample = currentSample;
     const rawLeft = sample?.raw.leftStick ?? { x: 0, y: 0 };
-    const processedLeft = sample?.processed.leftStick ?? { x: 0, y: 0 };
+    const simulationLeft = sample?.simulation.leftStick ?? { x: 0, y: 0 };
     const rawRight = sample?.raw.rightStick ?? { x: 0, y: 0 };
-    const processedRight = sample?.processed.rightStick ?? { x: 0, y: 0 };
-    drawStickPosition(byId<HTMLCanvasElement>("diagnostics-left-stick-canvas"), rawLeft, processedLeft);
-    drawStickPosition(byId<HTMLCanvasElement>("diagnostics-right-stick-canvas"), rawRight, processedRight);
-    for (const [prefix, raw] of [
-      ["left-stick", rawLeft],
-      ["right-stick", rawRight],
-    ] as const) {
-      setText(`diagnostics-${prefix}-raw-x`, formatNumber(raw.x, 3));
-      setText(`diagnostics-${prefix}-raw-y`, formatNumber(raw.y, 3));
-    }
+    const simulationRight = sample?.simulation.rightStick ?? { x: 0, y: 0 };
+    drawStickPosition(byId<HTMLCanvasElement>("diagnostics-left-stick-canvas"), rawLeft, simulationLeft);
+    drawStickPosition(byId<HTMLCanvasElement>("diagnostics-right-stick-canvas"), rawRight, simulationRight);
+    renderStickReadout("left-stick", rawLeft);
+    renderStickReadout("right-stick", rawRight);
     renderButtons(sample);
   }
 
@@ -282,7 +363,7 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
   }
 
   function schedulePollingMeasurement(delayMs = 0): void {
-    if (!visible || currentTab !== "polling" || pollingBusy || pollingTimer !== null) return;
+    if (!isPollingViewActive() || pollingBusy || pollingTimer !== null) return;
     if (delayMs === 0) {
       void runPollingMeasurement();
       return;
@@ -294,26 +375,27 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
   }
 
   async function runPollingMeasurement(): Promise<void> {
-    if (!visible || currentTab !== "polling" || pollingBusy) return;
+    if (!isPollingViewActive() || pollingBusy) return;
     pollingBusy = true;
-    pollingError = null;
     const requestId = ++pollingRequestId;
     renderPolling();
     try {
       const measurement = await options.measurePollingRate();
       if (requestId === pollingRequestId) {
         pollingMeasurement = measurement;
-        pollingError = null;
       }
-    } catch (error) {
+    } catch {
       if (requestId === pollingRequestId) {
         pollingMeasurement = null;
-        pollingError = errorText(error);
       }
     } finally {
       pollingBusy = false;
-      renderPolling();
-      schedulePollingMeasurement(500);
+      if (requestId === pollingRequestId) {
+        renderPolling();
+        schedulePollingMeasurement(500);
+      } else if (isPollingViewActive()) {
+        schedulePollingMeasurement();
+      }
     }
   }
 
@@ -323,9 +405,12 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
       window.clearTimeout(pollingTimer);
       pollingTimer = null;
     }
-    pollingBusy = false;
     pollingMeasurement = null;
-    pollingError = null;
+    pollingRateDisplaySamples = [];
+    averagePollingRateDisplaySamples = [];
+    displayedPollingRate = null;
+    displayedAveragePollingRate = null;
+    smoothedMeasurement = null;
   }
 
   function setTab(next: DiagnosticTab): void {
@@ -341,7 +426,7 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
       schedulePollingMeasurement();
     } else {
       stopPollingMeasurement();
-      lastProcessed = null;
+      lastSimulation = null;
       start();
     }
     render();
@@ -355,7 +440,8 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
       currentSample = readSample(gamepad);
     } else {
       currentSample = null;
-      lastProcessed = null;
+      lastSimulation = null;
+      selectedGamepadIndex = null;
     }
     render();
     animationFrame = window.requestAnimationFrame(tick);

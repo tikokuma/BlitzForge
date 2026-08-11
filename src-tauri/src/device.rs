@@ -1043,10 +1043,6 @@ pub fn write_macro(
 }
 
 fn read_profile(expected_device_path: &str) -> Result<(DeviceSummary, Vec<u8>), String> {
-    read_profile_once(expected_device_path)
-}
-
-fn read_profile_once(expected_device_path: &str) -> Result<(DeviceSummary, Vec<u8>), String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
     let summary = summary(info);
@@ -1396,81 +1392,6 @@ fn validate_key_binding(entry: &[u8; 4], index: usize) -> Result<(), String> {
     ))
 }
 
-#[cfg(test)]
-mod live_tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "requires a connected BIGBIG WON controller"]
-    fn live_macro_round_trip() {
-        let device_path = scan_device()
-            .expect("scan controller")
-            .expect("connected controller")
-            .device
-            .path;
-        let macros = read_macros(&device_path).expect("D5/D9 macro read");
-        let slot0 = macros
-            .slots
-            .first()
-            .expect("macro slot 0")
-            .raw_record
-            .clone();
-        assert!(!slot0.is_empty(), "slot 0 D9 record must be present");
-        let written = write_macro(&device_path, 0, slot0).expect("D8/D9 same-content round trip");
-        assert_eq!(written.ack_value, 0);
-    }
-
-    #[test]
-    #[ignore = "requires a connected BIGBIG WON controller"]
-    fn live_probe_one_macro_step_and_restore_empty_slot() {
-        let device_path = scan_device()
-            .expect("scan controller")
-            .expect("connected controller")
-            .device
-            .path;
-        let macros = read_macros(&device_path).expect("initial D5/D9 macro read");
-        let (slot, original) = macros
-            .slots
-            .iter()
-            .find(|slot| {
-                slot.step_count == 0 && slot.raw_record.len() == protocol::MACRO_HEADER_LENGTH
-            })
-            .map(|slot| (slot.slot, slot.raw_record.clone()))
-            .expect("an empty macro slot is required for the reversible probe");
-
-        let mut probe = original.clone();
-        probe[4..10].copy_from_slice(&[0xA5, 0x5A, 0x1F, 0x03, 0x12, 0x34]);
-        probe.extend_from_slice(&[0x50, 0x00, 0x12, 0x34, 0x56, 0x78, 0x11, 0x22, 0x33, 0x44]);
-        let expected_probe =
-            protocol::normalize_macro_record(&probe).expect("normalize one-step probe record");
-        let written =
-            write_macro(&device_path, slot, probe).expect("D8 one-step write and D9 readback");
-        println!(
-            "probe slot={} ack={} raw={}",
-            slot,
-            written.ack,
-            spaced_hex(&written.slot.raw_record)
-        );
-        assert_eq!(written.ack, "A5 05 D8 00 82");
-        assert_eq!(written.slot.raw_record, expected_probe);
-
-        let restored =
-            write_macro(&device_path, slot, original.clone()).expect("D8 restore and D9 readback");
-        println!(
-            "restored slot={} ack={} raw={}",
-            slot,
-            restored.ack,
-            spaced_hex(&restored.slot.raw_record)
-        );
-        assert_eq!(restored.ack, "A5 05 D8 00 82");
-        assert_eq!(
-            restored.slot.raw_record.len(),
-            protocol::MACRO_HEADER_LENGTH
-        );
-        assert_eq!(restored.slot.raw_record, original);
-    }
-}
-
 impl CurveSettingsInput {
     fn into_curve(self, label: &str) -> Result<protocol::CurveSettings, String> {
         if !(-10..=10).contains(&self.stabilization) {
@@ -1489,6 +1410,111 @@ impl CurveSettingsInput {
             stabilization: stabilization.to_ne_bytes()[0],
         })
     }
+}
+
+impl VibrationSettingsInput {
+    fn into_settings(self) -> Result<protocol::VibrationSettings, String> {
+        let off =
+            self.left.min == 0 && self.left.max == 1 && self.right.min == 0 && self.right.max == 1;
+        let valid_width =
+            |grip: &VibrationGripInput| grip.max >= grip.min && grip.max - grip.min >= 20;
+        if !off && (!valid_width(&self.left) || !valid_width(&self.right)) {
+            return Err("カスタム振動は最小と最大の差を20以上にしてください".into());
+        }
+        Ok(protocol::VibrationSettings {
+            left: protocol::VibrationGrip {
+                min: self.left.min,
+                max: self.left.max,
+            },
+            right: protocol::VibrationGrip {
+                min: self.right.min,
+                max: self.right.max,
+            },
+        })
+    }
+}
+
+fn find_config_info(api: &HidApi) -> Option<&hidapi::DeviceInfo> {
+    api.device_list().find(|info| is_config_info(info))
+}
+
+fn find_config_info_at_path<'a>(
+    api: &'a HidApi,
+    expected_device_path: &str,
+) -> Result<&'a hidapi::DeviceInfo, String> {
+    api.device_list()
+        .find(|info| is_config_info(info) && info.path().to_string_lossy() == expected_device_path)
+        .ok_or_else(|| {
+            "the connected controller changed; read its profile before continuing".into()
+        })
+}
+
+fn find_gamepad_info<'a>(
+    api: &'a HidApi,
+    config_info: &hidapi::DeviceInfo,
+) -> Result<&'a hidapi::DeviceInfo, String> {
+    let matching = api
+        .device_list()
+        .find(|info| is_gamepad_info(info) && same_physical_device(config_info, info));
+    matching.ok_or_else(|| "ゲームパッド入力インターフェースが見つかりません".into())
+}
+
+fn is_gamepad_info(info: &hidapi::DeviceInfo) -> bool {
+    info.vendor_id() == protocol::VENDOR_ID
+        && info.product_id() == protocol::PRODUCT_ID
+        && info.usage_page() == 0x0001
+        && matches!(info.usage(), 0x0004 | 0x0005)
+}
+
+fn same_physical_device(left: &hidapi::DeviceInfo, right: &hidapi::DeviceInfo) -> bool {
+    match (left.serial_number(), right.serial_number()) {
+        (Some(left), Some(right)) if !left.is_empty() && !right.is_empty() => left == right,
+        _ => device_instance_key(left) == device_instance_key(right),
+    }
+}
+
+fn device_instance_key(info: &hidapi::DeviceInfo) -> String {
+    let mut path = info
+        .path()
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .to_string();
+    if let Some(index) = ["&mi_", "&ig_", "&col"]
+        .iter()
+        .filter_map(|marker| path.find(marker))
+        .min()
+    {
+        path.truncate(index);
+    }
+    path
+}
+
+fn is_config_info(info: &hidapi::DeviceInfo) -> bool {
+    info.vendor_id() == protocol::VENDOR_ID
+        && info.product_id() == protocol::PRODUCT_ID
+        && info.usage_page() == protocol::CONFIG_USAGE_PAGE
+        && info.usage() == protocol::CONFIG_USAGE
+}
+
+fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {
+    DeviceSummary {
+        vendor_product: format!("VID_{:04X} PID_{:04X}", info.vendor_id(), info.product_id()),
+        usage: format!("0x{:04X}:0x{:04X}", info.usage_page(), info.usage()),
+        product: if is_config_info(info) {
+            "BIGBIG WON Blitz2".to_string()
+        } else {
+            info.product_string().unwrap_or("Controller").to_string()
+        },
+        path: info.path().to_string_lossy().into_owned(),
+    }
+}
+
+fn spaced_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -1637,109 +1663,4 @@ mod tests {
         assert_eq!(changes[0].before, "x10");
         assert_eq!(changes[0].after, "x20");
     }
-}
-
-impl VibrationSettingsInput {
-    fn into_settings(self) -> Result<protocol::VibrationSettings, String> {
-        let off =
-            self.left.min == 0 && self.left.max == 1 && self.right.min == 0 && self.right.max == 1;
-        let valid_width =
-            |grip: &VibrationGripInput| grip.max >= grip.min && grip.max - grip.min >= 20;
-        if !off && (!valid_width(&self.left) || !valid_width(&self.right)) {
-            return Err("カスタム振動は最小と最大の差を20以上にしてください".into());
-        }
-        Ok(protocol::VibrationSettings {
-            left: protocol::VibrationGrip {
-                min: self.left.min,
-                max: self.left.max,
-            },
-            right: protocol::VibrationGrip {
-                min: self.right.min,
-                max: self.right.max,
-            },
-        })
-    }
-}
-
-fn find_config_info(api: &HidApi) -> Option<&hidapi::DeviceInfo> {
-    api.device_list().find(|info| is_config_info(info))
-}
-
-fn find_config_info_at_path<'a>(
-    api: &'a HidApi,
-    expected_device_path: &str,
-) -> Result<&'a hidapi::DeviceInfo, String> {
-    api.device_list()
-        .find(|info| is_config_info(info) && info.path().to_string_lossy() == expected_device_path)
-        .ok_or_else(|| {
-            "the connected controller changed; read its profile before continuing".into()
-        })
-}
-
-fn find_gamepad_info<'a>(
-    api: &'a HidApi,
-    config_info: &hidapi::DeviceInfo,
-) -> Result<&'a hidapi::DeviceInfo, String> {
-    let matching = api
-        .device_list()
-        .find(|info| is_gamepad_info(info) && same_physical_device(config_info, info));
-    matching.ok_or_else(|| "ゲームパッド入力インターフェースが見つかりません".into())
-}
-
-fn is_gamepad_info(info: &hidapi::DeviceInfo) -> bool {
-    info.vendor_id() == protocol::VENDOR_ID
-        && info.product_id() == protocol::PRODUCT_ID
-        && info.usage_page() == 0x0001
-        && matches!(info.usage(), 0x0004 | 0x0005)
-}
-
-fn same_physical_device(left: &hidapi::DeviceInfo, right: &hidapi::DeviceInfo) -> bool {
-    match (left.serial_number(), right.serial_number()) {
-        (Some(left), Some(right)) if !left.is_empty() && !right.is_empty() => left == right,
-        _ => device_instance_key(left) == device_instance_key(right),
-    }
-}
-
-fn device_instance_key(info: &hidapi::DeviceInfo) -> String {
-    let mut path = info
-        .path()
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .to_string();
-    if let Some(index) = ["&mi_", "&ig_", "&col"]
-        .iter()
-        .filter_map(|marker| path.find(marker))
-        .min()
-    {
-        path.truncate(index);
-    }
-    path
-}
-
-fn is_config_info(info: &hidapi::DeviceInfo) -> bool {
-    info.vendor_id() == protocol::VENDOR_ID
-        && info.product_id() == protocol::PRODUCT_ID
-        && info.usage_page() == protocol::CONFIG_USAGE_PAGE
-        && info.usage() == protocol::CONFIG_USAGE
-}
-
-fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {
-    DeviceSummary {
-        vendor_product: format!("VID_{:04X} PID_{:04X}", info.vendor_id(), info.product_id()),
-        usage: format!("0x{:04X}:0x{:04X}", info.usage_page(), info.usage()),
-        product: if is_config_info(info) {
-            "BIGBIG WON Blitz2".to_string()
-        } else {
-            info.product_string().unwrap_or("Controller").to_string()
-        },
-        path: info.path().to_string_lossy().into_owned(),
-    }
-}
-
-fn spaced_hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }

@@ -375,6 +375,7 @@
             <div>
               <p class="section-kicker">INPUT VIEWER</p>
               <h2>入力状態</h2>
+              <p class="diagnostics-note">Gamepad APIの入力値と設定カーブのシミュレーションです。実機ファームウェアのProcessed値ではありません。</p>
             </div>
           </div>
 
@@ -382,23 +383,23 @@
             <article class="diagnostics-card">
               <div class="diagnostics-card-heading">
                 <div><p class="section-kicker">LEFT STICK</p><h3>左スティック</h3></div>
-                <span class="diagnostics-legend"><i class="legend-dot legend-raw"></i>Raw <i class="legend-dot legend-processed"></i>Processed</span>
+                <span class="diagnostics-legend"><i class="legend-dot legend-raw"></i>Gamepad <i class="legend-dot legend-simulation"></i>Simulation</span>
               </div>
               <canvas id="diagnostics-left-stick-canvas" class="diagnostics-stick-canvas" aria-label="左スティック現在位置"></canvas>
               <div class="diagnostics-axis-grid">
-                <div><span>Raw X</span><strong id="diagnostics-left-stick-raw-x">—</strong></div>
-                <div><span>Raw Y</span><strong id="diagnostics-left-stick-raw-y">—</strong></div>
+                <div><span>Gamepad X</span><strong id="diagnostics-left-stick-raw-x">—</strong></div>
+                <div><span>Gamepad Y</span><strong id="diagnostics-left-stick-raw-y">—</strong></div>
               </div>
             </article>
             <article class="diagnostics-card">
               <div class="diagnostics-card-heading">
                 <div><p class="section-kicker">RIGHT STICK</p><h3>右スティック</h3></div>
-                <span class="diagnostics-legend"><i class="legend-dot legend-raw"></i>Raw <i class="legend-dot legend-processed"></i>Processed</span>
+                <span class="diagnostics-legend"><i class="legend-dot legend-raw"></i>Gamepad <i class="legend-dot legend-simulation"></i>Simulation</span>
               </div>
               <canvas id="diagnostics-right-stick-canvas" class="diagnostics-stick-canvas" aria-label="右スティック現在位置"></canvas>
               <div class="diagnostics-axis-grid">
-                <div><span>Raw X</span><strong id="diagnostics-right-stick-raw-x">—</strong></div>
-                <div><span>Raw Y</span><strong id="diagnostics-right-stick-raw-y">—</strong></div>
+                <div><span>Gamepad X</span><strong id="diagnostics-right-stick-raw-x">—</strong></div>
+                <div><span>Gamepad Y</span><strong id="diagnostics-right-stick-raw-y">—</strong></div>
               </div>
             </article>
           </div>
@@ -412,7 +413,6 @@
         <section id="diagnostics-polling-section" class="panel diagnostics-section" role="tabpanel" hidden>
           <div class="section-heading diagnostics-heading">
             <div><p class="section-kicker">POLLING MONITOR</p><h2>ポーリングレート</h2></div>
-            <div class="button-row"><span id="diagnostics-polling-status" class="status-pill">Polling Monitorを開くと測定を開始します</span></div>
           </div>
           <div class="diagnostics-metric-grid diagnostics-polling-metrics">
             <div class="diagnostics-metric"><span>ポーリングレート</span><strong id="diagnostics-polling-rate">—</strong></div>

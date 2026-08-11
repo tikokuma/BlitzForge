@@ -1,6 +1,6 @@
 [package]
 name = "blitzforge"
-version = "0.1.1"
+version = "0.2.0"
 description = "BlitzForge configuration app for the BIGBIG WON Blitz2 controller"
 edition = "2024"
 

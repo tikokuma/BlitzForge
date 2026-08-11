@@ -82,6 +82,8 @@ pub struct ProfileListEntry {
     pub incompatibility_reason: Option<String>,
     pub active: bool,
     pub snapshot: ProfileSnapshot,
+    #[serde(skip)]
+    pub(crate) normalized_profile: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -365,13 +367,19 @@ fn optional_text(row: &Row<'_>, index: usize) -> rusqlite::Result<String> {
 }
 
 fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
-    let (profile_length, profile_version, supported, incompatibility_reason) =
+    let (profile_length, profile_version, supported, incompatibility_reason, normalized_profile) =
         match parse_profile_json(&snapshot.config_json) {
             Ok(bytes) => match protocol::normalize_v37_profile(&bytes) {
-                Ok(_) => (bytes.len(), Some("v37".to_string()), true, None),
-                Err(error) => (bytes.len(), None, false, Some(error)),
+                Ok(normalized) => (
+                    bytes.len(),
+                    Some("v37".to_string()),
+                    true,
+                    None,
+                    Some(normalized),
+                ),
+                Err(error) => (bytes.len(), None, false, Some(error), None),
             },
-            Err(error) => (0, None, false, Some(error)),
+            Err(error) => (0, None, false, Some(error), None),
         };
     ProfileListEntry {
         id: snapshot.id,
@@ -387,6 +395,7 @@ fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
         incompatibility_reason,
         active: false,
         snapshot,
+        normalized_profile,
     }
 }
 
