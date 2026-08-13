@@ -1,6 +1,3 @@
-use std::time::Duration;
-
-use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -87,27 +84,22 @@ struct ShareConfigData {
     config_json: Option<String>,
 }
 
-fn client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|error| format!("公式Share APIを初期化できませんでした: {error}"))
-}
-
 fn post_json<T: Serialize, R: DeserializeOwned>(url: &str, payload: &T) -> Result<R, String> {
-    let response = client()?
-        .post(url)
-        .json(payload)
+    let body = serde_json::to_string(payload)
+        .map_err(|error| format!("公式Share APIのリクエストを作成できませんでした: {error}"))?;
+    let response = minreq::post(url)
+        .with_timeout(15)
+        .with_header("Content-Type", "application/json")
+        .with_body(body)
         .send()
         .map_err(|error| format!("公式Share APIへ接続できませんでした: {error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .map_err(|error| format!("公式Share APIの応答を読み取れませんでした: {error}"))?;
-    if !status.is_success() {
-        return Err(format!("公式Share APIがHTTP {status}を返しました"));
+    if !(200..300).contains(&response.status_code) {
+        return Err(format!(
+            "公式Share APIがHTTP {}を返しました",
+            response.status_code
+        ));
     }
-    serde_json::from_str(&body)
+    serde_json::from_slice(response.as_bytes())
         .map_err(|error| format!("公式Share APIの応答形式が不正です: {error}"))
 }
 
@@ -190,7 +182,65 @@ pub fn import_share_code(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
     use super::*;
+
+    #[test]
+    fn posts_json_with_the_minimal_http_client() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            assert_eq!(request_line, "POST /share HTTP/1.1\r\n");
+
+            let mut content_length = 0;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header == "\r\n" {
+                    break;
+                }
+                if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap();
+                }
+            }
+            let mut request_body = vec![0; content_length];
+            reader.read_exact(&mut request_body).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&request_body).unwrap()["shareCode"],
+                "test-code"
+            );
+            drop(reader);
+
+            let body = r#"{"code":0,"msg":"OK","data":"result-code"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let response: ShareApiResponse = post_json(
+            &format!("http://{address}/share"),
+            &ImportShareConfigRequest {
+                phone_uuid: String::new(),
+                dev_uuid: String::new(),
+                share_code: "test-code".into(),
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(share_code_from_response(&response).unwrap(), "result-code");
+    }
 
     #[test]
     fn uses_official_share_request_fields() {

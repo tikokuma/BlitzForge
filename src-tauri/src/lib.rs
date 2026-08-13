@@ -26,6 +26,15 @@ struct AppState {
 struct ProfileListQuery {
     device_uuid: Option<String>,
     active_profile: Option<Vec<u8>>,
+    known_data_version: Option<i64>,
+    force: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileListResult {
+    data_version: i64,
+    profiles: Option<Vec<profiles::ProfileListEntry>>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -207,23 +216,32 @@ async fn scan_device(state: tauri::State<'_, AppState>) -> Result<Option<DeviceS
 async fn list_profiles(
     state: tauri::State<'_, AppState>,
     query: ProfileListQuery,
-) -> Result<Vec<profiles::ProfileListEntry>, String> {
-    run_locked(state.profile_store.clone(), "profile store", move |_| {
-        let mut entries = profiles::list_profiles()?;
-        let Some(active_profile) = query.active_profile else {
-            return Ok(entries);
+) -> Result<ProfileListResult, String> {
+    run_locked(state.profile_store.clone(), "profile store", move |store| {
+        let (data_version, mut profiles) =
+            profiles::list_profiles(store, query.known_data_version, query.force)?;
+        let Some(entries) = profiles.as_mut() else {
+            return Ok(ProfileListResult {
+                data_version,
+                profiles: None,
+            });
         };
-        let Some(active_profile) = protocol::normalize_v37_profile(&active_profile).ok() else {
-            return Ok(entries);
-        };
-        for entry in &mut entries {
-            entry.active = same_device_uuid(
-                &entry.device_uuid,
-                query.device_uuid.as_deref().unwrap_or_default(),
-            ) && entry.normalized_profile.as_deref()
-                == Some(active_profile.as_slice());
+        if let Some(active_profile) = query
+            .active_profile
+            .and_then(|profile| protocol::normalize_v37_profile(&profile).ok())
+        {
+            for entry in entries {
+                entry.active = same_device_uuid(
+                    &entry.device_uuid,
+                    query.device_uuid.as_deref().unwrap_or_default(),
+                ) && entry.normalized_profile.as_deref()
+                    == Some(active_profile.as_slice());
+            }
         }
-        Ok(entries)
+        Ok(ProfileListResult {
+            data_version,
+            profiles,
+        })
     })
     .await
 }
@@ -233,8 +251,8 @@ async fn load_saved_profile(
     state: tauri::State<'_, AppState>,
     id: i64,
 ) -> Result<ProfileDocumentView, String> {
-    run_locked(state.profile_store.clone(), "profile store", move |_| {
-        saved_profile_view(profiles::load_saved_profile(id)?, None)
+    run_locked(state.profile_store.clone(), "profile store", move |store| {
+        saved_profile_view(profiles::load_saved_profile(store, id)?, None)
     })
     .await
 }

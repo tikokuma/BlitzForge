@@ -46,6 +46,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   let draftRecord: number[] | null = null;
   let originalRecord: number[] | null = null;
   let selectedSlot = 0;
+  let dirty = false;
 
   function recordsEqual(left: number[], right: number[]): boolean {
     return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -69,9 +70,14 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       || record[9] !== (repeat & 0xff);
   }
 
+  function updateDirty(): void {
+    dirty = draftRecord !== null
+      && originalRecord !== null
+      && (!recordsEqual(draftRecord, originalRecord) || headerControlsDiffer(draftRecord));
+  }
+
   function isDirty(): boolean {
-    if (draftRecord === null || originalRecord === null) return false;
-    return !recordsEqual(draftRecord, originalRecord) || headerControlsDiffer(draftRecord);
+    return dirty;
   }
 
   function confirmDiscardChanges(message: string): boolean {
@@ -83,6 +89,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     draftRecord = null;
     originalRecord = null;
     selectedSlot = 0;
+    dirty = false;
     byId("macro-slots").replaceChildren();
     byId("macro-step-list").replaceChildren();
     byId("macro-slot-details").textContent = "コントローラーからマクロを読み込んでください。";
@@ -92,9 +99,11 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
 
   function syncActions(): void {
     const busy = host.isBusy();
-    byId<HTMLButtonElement>("add-macro-step").disabled = busy
+    const addButton = byId<HTMLButtonElement>("add-macro-step");
+    const disabled = busy
       || draftRecord === null
       || macroStepCount(draftRecord) >= MACRO_MAX_STEPS;
+    if (addButton.disabled !== disabled) addButton.disabled = disabled;
   }
 
   function setSelectValue(id: string, value: number): void {
@@ -151,18 +160,124 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   function commitStep(index: number, changes: Partial<MacroStep>): void {
     if (!draftRecord) return;
     draftRecord = updateMacroStep(draftRecord, index, changes);
-    renderSteps(draftRecord);
+    updateDirty();
+    const currentCard = byId("macro-step-list").children.item(index);
+    if (currentCard) currentCard.replaceWith(renderStep(draftRecord, index));
+    else renderSteps(draftRecord);
     host.syncHostActions();
+  }
+
+  function renderStep(record: readonly number[], index: number): HTMLElement {
+    const step = readMacroStep(record, index);
+    const card = document.createElement("article");
+    card.className = "macro-step-card";
+
+    const heading = document.createElement("div");
+    heading.className = "macro-step-heading";
+    const title = document.createElement("strong");
+    title.textContent = `操作 ${index + 1}`;
+    const stepSummary = document.createElement("span");
+    const labels = macroInputLabels(step.inputMask);
+    stepSummary.textContent = `${step.durationMs} ms · ${labels.length > 0 ? labels.join(" + ") : "入力なし"}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "削除";
+    remove.disabled = host.isBusy();
+    remove.addEventListener("click", () => {
+      if (!draftRecord) return;
+      draftRecord = removeMacroStep(draftRecord, index);
+      updateDirty();
+      renderSteps(draftRecord);
+      host.syncHostActions();
+    });
+    heading.append(title, stepSummary, remove);
+    card.append(heading);
+
+    const basic = document.createElement("div");
+    basic.className = "macro-step-basic";
+    const durationLabel = document.createElement("label");
+    durationLabel.textContent = "時間 (ms)";
+    const duration = document.createElement("input");
+    duration.type = "number";
+    duration.min = "0";
+    duration.max = "32760";
+    duration.step = "8";
+    duration.value = String(step.durationMs);
+    duration.addEventListener("change", () => {
+      const value = Number(duration.value);
+      if (Number.isFinite(value)) {
+        commitStep(index, { durationMs: Math.max(0, Math.min(32760, value)) });
+      }
+    });
+    durationLabel.append(duration);
+    const markerLabel = document.createElement("label");
+    markerLabel.className = "macro-check";
+    const marker = document.createElement("input");
+    marker.type = "checkbox";
+    marker.checked = step.marker;
+    marker.addEventListener("change", () => commitStep(index, { marker: marker.checked }));
+    markerLabel.append(marker, document.createTextNode("前の入力状態を引き継ぐ"));
+    basic.append(durationLabel, markerLabel);
+    card.append(basic);
+
+    const inputTitle = document.createElement("p");
+    inputTitle.className = "macro-subheading";
+    inputTitle.textContent = "コントローラー入力（複数選択可）";
+    card.append(inputTitle);
+    const keyGrid = document.createElement("div");
+    keyGrid.className = "macro-key-grid";
+    for (const [label, mask] of MACRO_INPUT_OPTIONS) {
+      const key = document.createElement("button");
+      key.type = "button";
+      key.className = "macro-key-toggle";
+      const active = macroInputOptionActive(step.inputMask, mask);
+      key.classList.toggle("active", active);
+      key.setAttribute("aria-pressed", String(active));
+      key.textContent = label;
+      key.addEventListener("click", () => {
+        const current = readMacroStep(draftRecord ?? record, index);
+        commitStep(index, { inputMask: toggleMacroInput(current.inputMask, mask) });
+      });
+      keyGrid.append(key);
+    }
+    card.append(keyGrid);
+
+    const analogTitle = document.createElement("p");
+    analogTitle.className = "macro-subheading";
+    analogTitle.textContent = "スティック（-128〜127）";
+    card.append(analogTitle);
+    const analogGrid = document.createElement("div");
+    analogGrid.className = "macro-analog-grid";
+    ["左 X", "左 Y", "右 X", "右 Y"].forEach((label, analogIndex) => {
+      const field = document.createElement("label");
+      field.textContent = label;
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "-128";
+      input.max = "127";
+      input.value = String(step.analog[analogIndex]);
+      input.addEventListener("change", () => {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        const analog = [...readMacroStep(draftRecord ?? record, index).analog] as MacroStep["analog"];
+        analog[analogIndex] = Math.max(-128, Math.min(127, Math.round(value)));
+        commitStep(index, { analog });
+      });
+      field.append(input);
+      analogGrid.append(field);
+    });
+    card.append(analogGrid);
+    return card;
   }
 
   function renderSteps(record: readonly number[] | null): void {
     const container = byId("macro-step-list");
-    container.replaceChildren();
     if (!record || !isMacroRecord(record)) {
       const empty = document.createElement("p");
       empty.className = "empty-hint";
       empty.textContent = "先にコントローラーからマクロを読み込んでください。";
-      container.append(empty);
+      container.replaceChildren(empty);
       return;
     }
 
@@ -171,112 +286,13 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       const empty = document.createElement("p");
       empty.className = "empty-hint";
       empty.textContent = "この枠は空です。「操作を追加」から作成できます。";
-      container.append(empty);
+      container.replaceChildren(empty);
       return;
     }
 
-    for (let index = 0; index < count; index += 1) {
-      const step = readMacroStep(record, index);
-      const card = document.createElement("article");
-      card.className = "macro-step-card";
-
-      const heading = document.createElement("div");
-      heading.className = "macro-step-heading";
-      const title = document.createElement("strong");
-      title.textContent = `操作 ${index + 1}`;
-      const stepSummary = document.createElement("span");
-      const labels = macroInputLabels(step.inputMask);
-      stepSummary.textContent = `${step.durationMs} ms · ${labels.length > 0 ? labels.join(" + ") : "入力なし"}`;
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "danger-button";
-      remove.textContent = "削除";
-      remove.disabled = host.isBusy();
-      remove.addEventListener("click", () => {
-        if (!draftRecord) return;
-        draftRecord = removeMacroStep(draftRecord, index);
-        renderSteps(draftRecord);
-        host.syncHostActions();
-      });
-      heading.append(title, stepSummary, remove);
-      card.append(heading);
-
-      const basic = document.createElement("div");
-      basic.className = "macro-step-basic";
-      const durationLabel = document.createElement("label");
-      durationLabel.textContent = "時間 (ms)";
-      const duration = document.createElement("input");
-      duration.type = "number";
-      duration.min = "0";
-      duration.max = "32760";
-      duration.step = "8";
-      duration.value = String(step.durationMs);
-      duration.addEventListener("change", () => {
-        const value = Number(duration.value);
-        if (Number.isFinite(value)) {
-          commitStep(index, { durationMs: Math.max(0, Math.min(32760, value)) });
-        }
-      });
-      durationLabel.append(duration);
-      const markerLabel = document.createElement("label");
-      markerLabel.className = "macro-check";
-      const marker = document.createElement("input");
-      marker.type = "checkbox";
-      marker.checked = step.marker;
-      marker.addEventListener("change", () => commitStep(index, { marker: marker.checked }));
-      markerLabel.append(marker, document.createTextNode("前の入力状態を引き継ぐ"));
-      basic.append(durationLabel, markerLabel);
-      card.append(basic);
-
-      const inputTitle = document.createElement("p");
-      inputTitle.className = "macro-subheading";
-      inputTitle.textContent = "コントローラー入力（複数選択可）";
-      card.append(inputTitle);
-      const keyGrid = document.createElement("div");
-      keyGrid.className = "macro-key-grid";
-      for (const [label, mask] of MACRO_INPUT_OPTIONS) {
-        const key = document.createElement("button");
-        key.type = "button";
-        key.className = "macro-key-toggle";
-        const active = macroInputOptionActive(step.inputMask, mask);
-        key.classList.toggle("active", active);
-        key.setAttribute("aria-pressed", String(active));
-        key.textContent = label;
-        key.addEventListener("click", () => {
-          const current = readMacroStep(draftRecord ?? record, index);
-          commitStep(index, { inputMask: toggleMacroInput(current.inputMask, mask) });
-        });
-        keyGrid.append(key);
-      }
-      card.append(keyGrid);
-
-      const analogTitle = document.createElement("p");
-      analogTitle.className = "macro-subheading";
-      analogTitle.textContent = "スティック（-128〜127）";
-      card.append(analogTitle);
-      const analogGrid = document.createElement("div");
-      analogGrid.className = "macro-analog-grid";
-      ["左 X", "左 Y", "右 X", "右 Y"].forEach((label, analogIndex) => {
-        const field = document.createElement("label");
-        field.textContent = label;
-        const input = document.createElement("input");
-        input.type = "number";
-        input.min = "-128";
-        input.max = "127";
-        input.value = String(step.analog[analogIndex]);
-        input.addEventListener("change", () => {
-          const value = Number(input.value);
-          if (!Number.isFinite(value)) return;
-          const analog = [...readMacroStep(draftRecord ?? record, index).analog] as MacroStep["analog"];
-          analog[analogIndex] = Math.max(-128, Math.min(127, Math.round(value)));
-          commitStep(index, { analog });
-        });
-        field.append(input);
-        analogGrid.append(field);
-      });
-      card.append(analogGrid);
-      container.append(card);
-    }
+    container.replaceChildren(
+      ...Array.from({ length: count }, (_, index) => renderStep(record, index)),
+    );
   }
 
   function addStep(): void {
@@ -286,6 +302,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       return;
     }
     draftRecord = appendMacroStep(draftRecord);
+    updateDirty();
     renderSteps(draftRecord);
     host.syncHostActions();
   }
@@ -305,6 +322,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     const validRecord = isMacroRecord(selected.rawRecord);
     originalRecord = validRecord ? selected.rawRecord.slice() : null;
     draftRecord = validRecord ? selected.rawRecord.slice() : null;
+    dirty = false;
     if (draftRecord) renderHeader(draftRecord);
     renderSteps(draftRecord);
 
@@ -321,6 +339,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   function readDraft(): MacroCommitInput | null {
     if (draftRecord === null || originalRecord === null) return null;
     draftRecord = updateHeaderFromControls(draftRecord);
+    updateDirty();
     return {
       slot: selectedSlot,
       rawRecord: draftRecord.slice(),
@@ -366,6 +385,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     const savedRecord = result.slot.rawRecord.slice();
     originalRecord = savedRecord.slice();
     draftRecord = savedRecord.slice();
+    dirty = false;
     if (summary) {
       summary = {
         ...summary,
@@ -385,6 +405,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     if (!draftRecord) return;
     try {
       draftRecord = updateHeaderFromControls(draftRecord);
+      updateDirty();
       renderHeader(draftRecord);
       const slot = Number(byId<HTMLSelectElement>("macro-slot").value) + 1;
       byId("macro-slot-details").textContent = `スロット ${slot}を編集中です。`;

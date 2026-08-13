@@ -26,6 +26,7 @@ export type ProfileSnapshot = {
 
 export type ProfileListEntry = {
   id: number;
+  revision: number;
   name: string;
   deviceUuid: string;
   deviceName: string;
@@ -37,7 +38,6 @@ export type ProfileListEntry = {
   supported: boolean;
   incompatibilityReason: string | null;
   active: boolean;
-  snapshot: ProfileSnapshot;
 };
 
 export type ActiveProfileState = "known" | "remembered" | "unknown";

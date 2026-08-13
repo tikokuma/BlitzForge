@@ -10,7 +10,6 @@ import type {
   MacroSummary,
   ProfileDocument,
   ProfileListEntry,
-  ProfileSnapshot,
   PollingMeasurement,
   SaveProfileInput,
 } from "./models";
@@ -28,19 +27,26 @@ type ShareProfileInput = {
 type ProfileListQuery = {
   deviceUuid: string | null;
   activeProfile: number[] | null;
+  knownDataVersion: number | null;
+  force: boolean;
+};
+
+type ProfileListResult = {
+  dataVersion: number;
+  profiles: ProfileListEntry[] | null;
 };
 
 export const backend = {
   scanDevice: (): Promise<DeviceSession | null> => invoke("scan_device"),
-  listProfiles: (query: ProfileListQuery): Promise<ProfileListEntry[]> =>
+  listProfiles: (query: ProfileListQuery): Promise<ProfileListResult> =>
     invoke("list_profiles", { query }),
   loadSavedProfile: (id: number): Promise<ProfileDocument> => invoke("load_saved_profile", { id }),
   saveProfile: (input: SaveProfileInput): Promise<ProfileDocument> => invoke("save_profile", { input }),
   commitProfile: (input: CommitProfileInput): Promise<CommitResult> => invoke("commit_profile", { input }),
   previewProfileCommit: (input: CommitProfileInput): Promise<CommitPreview> =>
     invoke("preview_profile_commit", { input }),
-  deleteProfile: (id: number, snapshot: ProfileSnapshot): Promise<void> =>
-    invoke("delete_profile", { input: { id, snapshot } }),
+  deleteProfile: (id: number, revision: number): Promise<void> =>
+    invoke("delete_profile", { input: { id, revision } }),
   readProfile: (devicePath: string): Promise<ProfileDocument> => invoke("read_profile", { devicePath }),
   importShareProfile: (shareCode: string, deviceUuid: string): Promise<ProfileDocument> =>
     invoke("import_share_profile", { shareCode, deviceUuid }),

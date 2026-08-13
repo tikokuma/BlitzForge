@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -49,6 +51,11 @@ const SELECT_COLUMNS: &str = "FID, FID_WebService, FPhoneUUID_WebService, FDevUU
 #[derive(Default)]
 pub struct ProfileStoreState {
     backup_created: bool,
+    database: Option<OpenDatabase>,
+    cached_data_version: Option<i64>,
+    cached_profiles: Vec<ProfileListEntry>,
+    listed_snapshots: HashMap<u64, Arc<ProfileSnapshot>>,
+    next_revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -70,6 +77,7 @@ pub struct ProfileSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ProfileListEntry {
     pub id: i64,
+    pub revision: u64,
     pub name: String,
     pub device_uuid: String,
     pub device_name: String,
@@ -81,9 +89,10 @@ pub struct ProfileListEntry {
     pub supported: bool,
     pub incompatibility_reason: Option<String>,
     pub active: bool,
-    pub snapshot: ProfileSnapshot,
     #[serde(skip)]
-    pub(crate) normalized_profile: Option<Vec<u8>>,
+    snapshot: Arc<ProfileSnapshot>,
+    #[serde(skip)]
+    pub(crate) normalized_profile: Option<Arc<[u8]>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -124,7 +133,7 @@ pub struct SaveProfileInput {
 #[serde(rename_all = "camelCase")]
 pub struct DeleteProfileInput {
     pub id: i64,
-    pub snapshot: ProfileSnapshot,
+    pub revision: u64,
 }
 
 struct OpenDatabase {
@@ -140,12 +149,32 @@ pub fn database_path() -> Result<PathBuf, String> {
         .join(DATABASE_FILE))
 }
 
-pub fn list_profiles() -> Result<Vec<ProfileListEntry>, String> {
-    list_profiles_at_path(&database_path()?)
+pub fn list_profiles(
+    state: &mut ProfileStoreState,
+    known_data_version: Option<i64>,
+    force: bool,
+) -> Result<(i64, Option<Vec<ProfileListEntry>>), String> {
+    let data_version = profile_data_version(profile_database(state)?)?;
+    if !force && known_data_version == Some(data_version) {
+        return Ok((data_version, None));
+    }
+    let mut entries = if state.cached_data_version == Some(data_version) {
+        state.cached_profiles.clone()
+    } else {
+        let entries = list_profiles_from_database(profile_database(state)?)?;
+        state.cached_data_version = Some(data_version);
+        state.cached_profiles = entries.clone();
+        entries
+    };
+    cache_listed_snapshots(state, &mut entries);
+    Ok((data_version, Some(entries)))
 }
 
-pub fn load_saved_profile(id: i64) -> Result<ProfileDocument, String> {
-    load_saved_profile_at_path(&database_path()?, id)
+pub fn load_saved_profile(
+    state: &mut ProfileStoreState,
+    id: i64,
+) -> Result<ProfileDocument, String> {
+    load_saved_profile_from_database(profile_database(state)?, id)
 }
 
 pub fn save_profile(
@@ -159,11 +188,39 @@ pub fn delete_profile(
     state: &mut ProfileStoreState,
     input: DeleteProfileInput,
 ) -> Result<(), String> {
-    delete_profile_at_path(state, &database_path()?, input)
+    delete_listed_profile_at_path(state, &database_path()?, input)
 }
 
+fn cache_listed_snapshots(state: &mut ProfileStoreState, entries: &mut [ProfileListEntry]) {
+    state.listed_snapshots.clear();
+    for entry in entries {
+        state.next_revision = state.next_revision.wrapping_add(1).max(1);
+        entry.revision = state.next_revision;
+        state
+            .listed_snapshots
+            .insert(entry.revision, entry.snapshot.clone());
+    }
+}
+
+#[cfg(test)]
 pub fn list_profiles_at_path(path: &Path) -> Result<Vec<ProfileListEntry>, String> {
     let database = open_database(path)?;
+    list_profiles_from_database(&database)
+}
+
+#[cfg(test)]
+fn list_profiles_for_state_at_path(
+    state: &mut ProfileStoreState,
+    path: &Path,
+) -> Result<Vec<ProfileListEntry>, String> {
+    if state.database.is_none() {
+        state.database = Some(open_database(path)?);
+    }
+    let (_, entries) = list_profiles(state, None, true)?;
+    entries.ok_or_else(|| "profile list was unexpectedly unchanged".to_string())
+}
+
+fn list_profiles_from_database(database: &OpenDatabase) -> Result<Vec<ProfileListEntry>, String> {
     let mut statement = database
         .connection
         .prepare(&format!(
@@ -180,14 +237,39 @@ pub fn list_profiles_at_path(path: &Path) -> Result<Vec<ProfileListEntry>, Strin
     .collect()
 }
 
+fn profile_data_version(database: &OpenDatabase) -> Result<i64, String> {
+    database
+        .connection
+        .query_row("PRAGMA data_version", [], |row| row.get(0))
+        .map_err(sql_error)
+}
+
+#[cfg(test)]
 pub fn load_saved_profile_at_path(path: &Path, id: i64) -> Result<ProfileDocument, String> {
     let database = open_database(path)?;
+    load_saved_profile_from_database(&database, id)
+}
+
+fn load_saved_profile_from_database(
+    database: &OpenDatabase,
+    id: i64,
+) -> Result<ProfileDocument, String> {
     let snapshot = snapshot_by_id(&database.connection, id)?
         .ok_or_else(|| format!("profile {id} was not found"))?;
     if snapshot.deleted != 0 {
         return Err(format!("profile {id} is deleted"));
     }
     document_from_snapshot(snapshot)
+}
+
+fn profile_database(state: &mut ProfileStoreState) -> Result<&OpenDatabase, String> {
+    if state.database.is_none() {
+        state.database = Some(open_database(&database_path()?)?);
+    }
+    state
+        .database
+        .as_ref()
+        .ok_or_else(|| "profile database could not be opened".to_string())
 }
 
 pub fn save_profile_at_path(
@@ -260,28 +342,45 @@ pub fn save_profile_at_path(
     document_from_snapshot(snapshot)
 }
 
-pub fn delete_profile_at_path(
+fn delete_listed_profile_at_path(
     state: &mut ProfileStoreState,
     path: &Path,
     input: DeleteProfileInput,
+) -> Result<(), String> {
+    let expected = state
+        .listed_snapshots
+        .get(&input.revision)
+        .filter(|snapshot| snapshot.id == input.id)
+        .cloned()
+        .ok_or_else(|| profile_conflict(input.id))?;
+    delete_profile_at_path(state, path, input.id, expected.as_ref())?;
+    state.listed_snapshots.remove(&input.revision);
+    Ok(())
+}
+
+fn delete_profile_at_path(
+    state: &mut ProfileStoreState,
+    path: &Path,
+    id: i64,
+    expected: &ProfileSnapshot,
 ) -> Result<(), String> {
     let mut database = open_database(path)?;
     ensure_writable(&database)?;
     ensure_backup(state, path)?;
     let transaction = database.connection.transaction().map_err(sql_error)?;
-    let current = snapshot_by_id(&transaction, input.id)?
-        .ok_or_else(|| format!("profile {} was not found", input.id))?;
-    if current != input.snapshot {
-        return Err(profile_conflict(input.id));
+    let current =
+        snapshot_by_id(&transaction, id)?.ok_or_else(|| format!("profile {id} was not found"))?;
+    if current != *expected {
+        return Err(profile_conflict(id));
     }
     let changed = transaction
         .execute(
             "UPDATE t_Config SET FDeleted = 1 WHERE FID = ?1 AND FDeleted = 0",
-            params![input.id],
+            params![id],
         )
         .map_err(sql_error)?;
     if changed != 1 {
-        return Err(format!("profile {} was not found", input.id));
+        return Err(format!("profile {id} was not found"));
     }
     transaction.commit().map_err(sql_error)
 }
@@ -375,14 +474,16 @@ fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
                     Some("v37".to_string()),
                     true,
                     None,
-                    Some(normalized),
+                    Some(Arc::from(normalized)),
                 ),
                 Err(error) => (bytes.len(), None, false, Some(error), None),
             },
             Err(error) => (0, None, false, Some(error), None),
         };
+    let snapshot = Arc::new(snapshot);
     ProfileListEntry {
         id: snapshot.id,
+        revision: 0,
         name: snapshot.name.clone(),
         device_uuid: snapshot.device_uuid.clone(),
         device_name: snapshot.device_name.clone(),
@@ -417,21 +518,8 @@ fn document_from_snapshot(snapshot: ProfileSnapshot) -> Result<ProfileDocument, 
 }
 
 fn parse_profile_json(json: &str) -> Result<Vec<u8>, String> {
-    let value: serde_json::Value = serde_json::from_str(json)
-        .map_err(|error| format!("FConfigJson is not valid JSON: {error}"))?;
-    let array = value
-        .as_array()
-        .ok_or_else(|| "FConfigJson must be a JSON array".to_string())?;
-    let mut bytes = Vec::with_capacity(array.len());
-    for (index, value) in array.iter().enumerate() {
-        let number = value.as_u64().ok_or_else(|| {
-            format!("FConfigJson value at index {index} is not an unsigned integer")
-        })?;
-        let byte = u8::try_from(number)
-            .map_err(|_| format!("FConfigJson value at index {index} is outside 0..255"))?;
-        bytes.push(byte);
-    }
-    Ok(bytes)
+    serde_json::from_str(json)
+        .map_err(|error| format!("FConfigJson is not a valid byte array: {error}"))
 }
 
 fn validate_name(name: &str) -> Result<String, String> {
@@ -542,13 +630,24 @@ mod tests {
         .expect("rename profile");
         assert_eq!(renamed.id, saved.id);
         assert_eq!(renamed.name, "Renamed");
+        let listed = list_profiles_for_state_at_path(&mut state, &path).expect("list renamed");
+        let list_json = serde_json::to_value(&listed[0]).expect("serialize list entry");
+        assert!(listed[0].revision > 0);
+        assert!(list_json.get("revision").is_some());
+        assert!(list_json.get("snapshot").is_none());
+        assert!(list_json.get("configJson").is_none());
+        let known_data_version = state.cached_data_version;
+        let (data_version, unchanged) =
+            list_profiles(&mut state, known_data_version, false).expect("check unchanged");
+        assert_eq!(Some(data_version), state.cached_data_version);
+        assert!(unchanged.is_none());
 
-        delete_profile_at_path(
+        delete_listed_profile_at_path(
             &mut state,
             &path,
             DeleteProfileInput {
                 id: renamed.id,
-                snapshot: renamed.snapshot,
+                revision: listed[0].revision,
             },
         )
         .expect("delete profile");
@@ -633,6 +732,8 @@ mod tests {
         let saved = save_profile_at_path(&mut state, &path, save_input(None, None, "Original"))
             .expect("save profile");
         let loaded = load_saved_profile_at_path(&path, saved.id).expect("load profile");
+        let listed = list_profiles_for_state_at_path(&mut state, &path).expect("list profile");
+        let initial_data_version = state.cached_data_version;
 
         let external = Connection::open(&path).expect("external connection");
         external
@@ -644,10 +745,20 @@ mod tests {
                 params!["Official change", saved.id],
             )
             .expect("external update");
-        assert_eq!(
-            list_profiles_at_path(&path).expect("list")[0].name,
-            "Official change"
-        );
+        let delete_error = delete_listed_profile_at_path(
+            &mut state,
+            &path,
+            DeleteProfileInput {
+                id: saved.id,
+                revision: listed[0].revision,
+            },
+        )
+        .expect_err("stale delete must be rejected");
+        assert!(delete_error.starts_with("PROFILE_CONFLICT:"));
+
+        let refreshed = list_profiles_for_state_at_path(&mut state, &path).expect("refresh list");
+        assert_eq!(refreshed[0].name, "Official change");
+        assert_ne!(state.cached_data_version, initial_data_version);
 
         let error = save_profile_at_path(
             &mut state,

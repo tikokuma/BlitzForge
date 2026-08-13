@@ -30,13 +30,19 @@ export function setupWindowControls(reportMessage: (message: string) => void): v
   const toggleMaximize = () => {
     runWindowAction(appWindow.toggleMaximize().then(updateMaximizeState));
   };
+  let resizeTimer: number | null = null;
+  const scheduleMaximizeStateUpdate = () => {
+    if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      resizeTimer = null;
+      void updateMaximizeState();
+    }, 100);
+  };
 
   byId("window-minimize").addEventListener("click", () => runWindowAction(appWindow.minimize()));
   maximizeButton.addEventListener("click", toggleMaximize);
   byId("window-close").addEventListener("click", () => runWindowAction(appWindow.close()));
   byId("window-titlebar-drag-region").addEventListener("dblclick", toggleMaximize);
-  runWindowAction(appWindow.onResized(() => {
-    void updateMaximizeState();
-  }));
+  runWindowAction(appWindow.onResized(scheduleMaximizeStateUpdate));
   void updateMaximizeState();
 }

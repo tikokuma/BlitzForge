@@ -9,7 +9,7 @@ export type DiagnosticSample = {
   raw: {
     leftStick: StickPoint;
     rightStick: StickPoint;
-    buttons: readonly boolean[];
+    buttonMask: number;
   };
   simulation: {
     leftStick: StickPoint;

@@ -33,6 +33,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
   let keymapDraft: string[] = Array.from({ length: KEYMAP_SLOT_COUNT }, () => KEYMAP_DEFAULT_ENTRY);
   let activeSlot: number | null = null;
   let pendingChoice: KeymapChoice | null = null;
+  let choicesInitialized = false;
 
   function rapidFireForSlot(slot: number): boolean | null {
     return rapidFireDraft.keys[slot] ?? null;
@@ -56,85 +57,93 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
     const state = rapidFireForSlot(slot);
     if (state === null) return;
     rapidFireDraft.keys[slot] = !state;
-    renderRows();
-    renderRapidFireControls();
+    updateRow(slot);
     host.markDirty();
   }
 
   function resetSlot(slot: number): void {
     if (keymapDraft[slot] === KEYMAP_DEFAULT_ENTRY) return;
     keymapDraft[slot] = KEYMAP_DEFAULT_ENTRY;
-    renderRows();
+    updateRow(slot);
     renderSummary();
     host.markDirty();
   }
 
+  function renderRow(slot: number, label: string): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "keymap-row";
+    row.dataset.keymapRow = String(slot);
+
+    const sourceCell = document.createElement("div");
+    sourceCell.className = "keymap-source-cell";
+    const source = document.createElement("span");
+    source.className = "keymap-source";
+    source.textContent = label;
+    const sourceHint = document.createElement("small");
+    sourceHint.className = "keymap-hint";
+    sourceHint.textContent = `スロット ${String(slot + 1).padStart(2, "0")}`;
+    sourceCell.append(source, sourceHint);
+
+    const mapping = keymapDisplay(keymapDraft[slot] ?? KEYMAP_DEFAULT_ENTRY, slot);
+    const mappingButton = document.createElement("button");
+    mappingButton.className = "keymap-mapping";
+    if (mapping.choice && mapping.choice.kind !== "identity") {
+      mappingButton.classList.add("keymap-mapping-configured");
+    }
+    mappingButton.type = "button";
+    mappingButton.textContent = mapping.label;
+    mappingButton.dataset.keymapSlot = String(slot);
+    mappingButton.setAttribute("aria-label", `${label} のマッピング: ${mapping.label}`);
+    mappingButton.addEventListener("click", () => openDialog(slot));
+
+    const mappingCell = document.createElement("div");
+    mappingCell.className = "keymap-mapping-cell";
+    mappingCell.append(mappingButton);
+    const mappingHint = document.createElement("small");
+    mappingHint.className = "keymap-hint keymap-mapping-hint";
+    mappingHint.textContent = mapping.detail;
+    mappingCell.append(mappingHint);
+    if (keymapDraft[slot] !== KEYMAP_DEFAULT_ENTRY) {
+      const resetButton = document.createElement("button");
+      resetButton.type = "button";
+      resetButton.className = "keymap-reset";
+      resetButton.textContent = "デフォルトに戻す";
+      resetButton.setAttribute("aria-label", `${label} のバインドをデフォルトに戻す`);
+      resetButton.addEventListener("click", () => resetSlot(slot));
+      mappingCell.append(resetButton);
+    }
+
+    const rapidState = rapidFireForSlot(slot);
+    const rapid = document.createElement(rapidState === null ? "span" : "button");
+    rapid.className = rapidState === null ? "keymap-rapid" : "keymap-rapid keymap-rapid-toggle";
+    if (rapid instanceof HTMLButtonElement) {
+      rapid.type = "button";
+      rapid.setAttribute("aria-pressed", String(rapidState === true));
+      rapid.addEventListener("click", () => toggleRapidFire(slot));
+      rapid.title = "連射を切り替えます";
+    } else {
+      rapid.title = "この連射状態は判定できません";
+    }
+    const rapidDot = document.createElement("span");
+    rapidDot.className = "keymap-rapid-dot";
+    if (rapidState === true) rapidDot.classList.add("enabled");
+    if (rapidState === null) rapidDot.classList.add("unknown");
+    rapid.append("連射", rapidDot);
+
+    row.append(sourceCell, mappingCell, rapid);
+    return row;
+  }
+
   function renderRows(): void {
     byId("keymap-grid").replaceChildren(
-      ...KEYMAP_VISIBLE_SOURCES.map(({ slot, label }) => {
-        const row = document.createElement("div");
-        row.className = "keymap-row";
-
-        const sourceCell = document.createElement("div");
-        sourceCell.className = "keymap-source-cell";
-        const source = document.createElement("span");
-        source.className = "keymap-source";
-        source.textContent = label;
-        const sourceHint = document.createElement("small");
-        sourceHint.className = "keymap-hint";
-        sourceHint.textContent = `スロット ${String(slot + 1).padStart(2, "0")}`;
-        sourceCell.append(source, sourceHint);
-
-        const mapping = keymapDisplay(keymapDraft[slot] ?? KEYMAP_DEFAULT_ENTRY, slot);
-        const mappingButton = document.createElement("button");
-        mappingButton.className = "keymap-mapping";
-        if (mapping.choice && mapping.choice.kind !== "identity") {
-          mappingButton.classList.add("keymap-mapping-configured");
-        }
-        mappingButton.type = "button";
-        mappingButton.textContent = mapping.label;
-        mappingButton.dataset.keymapSlot = String(slot);
-        mappingButton.setAttribute("aria-label", `${label} のマッピング: ${mapping.label}`);
-        mappingButton.addEventListener("click", () => openDialog(slot));
-
-        const mappingCell = document.createElement("div");
-        mappingCell.className = "keymap-mapping-cell";
-        mappingCell.append(mappingButton);
-        const mappingHint = document.createElement("small");
-        mappingHint.className = "keymap-hint keymap-mapping-hint";
-        mappingHint.textContent = mapping.detail;
-        mappingCell.append(mappingHint);
-        if (keymapDraft[slot] !== KEYMAP_DEFAULT_ENTRY) {
-          const resetButton = document.createElement("button");
-          resetButton.type = "button";
-          resetButton.className = "keymap-reset";
-          resetButton.textContent = "デフォルトに戻す";
-          resetButton.setAttribute("aria-label", `${label} のバインドをデフォルトに戻す`);
-          resetButton.addEventListener("click", () => resetSlot(slot));
-          mappingCell.append(resetButton);
-        }
-
-        const rapidState = rapidFireForSlot(slot);
-        const rapid = document.createElement(rapidState === null ? "span" : "button");
-        rapid.className = rapidState === null ? "keymap-rapid" : "keymap-rapid keymap-rapid-toggle";
-        if (rapid instanceof HTMLButtonElement) {
-          rapid.type = "button";
-          rapid.setAttribute("aria-pressed", String(rapidState === true));
-          rapid.addEventListener("click", () => toggleRapidFire(slot));
-          rapid.title = "連射を切り替えます";
-        } else {
-          rapid.title = "この連射状態は判定できません";
-        }
-        const rapidDot = document.createElement("span");
-        rapidDot.className = "keymap-rapid-dot";
-        if (rapidState === true) rapidDot.classList.add("enabled");
-        if (rapidState === null) rapidDot.classList.add("unknown");
-        rapid.append("連射", rapidDot);
-
-        row.append(sourceCell, mappingCell, rapid);
-        return row;
-      }),
+      ...KEYMAP_VISIBLE_SOURCES.map(({ slot, label }) => renderRow(slot, label)),
     );
+  }
+
+  function updateRow(slot: number): void {
+    const source = KEYMAP_VISIBLE_SOURCES.find((candidate) => candidate.slot === slot);
+    const row = byId("keymap-grid").querySelector(`[data-keymap-row="${slot}"]`);
+    if (source && row) row.replaceWith(renderRow(slot, source.label));
   }
 
   function renderSummary(): void {
@@ -153,43 +162,83 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
   }
 
   function renderChoiceButtons(): void {
-    byId("keymap-controller-grid").replaceChildren(
-      ...KEYMAP_CONTROLLER_CHOICES.map((choice) => {
-        const button = document.createElement("button");
-        button.className = `key-choice${choice.kind === "none" ? " key-choice-null" : ""}`;
-        button.type = "button";
-        button.textContent = choice.label;
-        button.dataset.keymapChoice = keymapChoiceKey(choice);
-        button.addEventListener("click", () => {
-          pendingChoice = choice;
-          updateDialogSelection();
-        });
-        return button;
-      }),
-    );
-
     const modifierSelect = byId<HTMLSelectElement>("keymap-keyboard-modifier");
-    modifierSelect.replaceChildren(
-      ...KEYBOARD_MODIFIERS.map(([label, value]) => {
-        const option = document.createElement("option");
-        option.value = String(value);
-        option.textContent = label === "None" ? "なし" : label;
-        return option;
-      }),
-    );
     const secondSelect = byId<HTMLSelectElement>("keymap-keyboard-second");
-    const noneOption = document.createElement("option");
-    noneOption.value = "0";
-    noneOption.textContent = "None";
-    secondSelect.replaceChildren(
-      noneOption,
-      ...KEYBOARD_KEYS.map(([label, usage]) => {
-        const option = document.createElement("option");
-        option.value = String(usage);
-        option.textContent = label;
-        return option;
-      }),
-    );
+    if (!choicesInitialized) {
+      choicesInitialized = true;
+      byId("keymap-controller-grid").replaceChildren(
+        ...KEYMAP_CONTROLLER_CHOICES.map((choice) => {
+          const button = document.createElement("button");
+          button.className = `key-choice${choice.kind === "none" ? " key-choice-null" : ""}`;
+          button.type = "button";
+          button.textContent = choice.label;
+          button.dataset.keymapChoice = keymapChoiceKey(choice);
+          button.addEventListener("click", () => {
+            pendingChoice = choice;
+            updateDialogSelection();
+          });
+          return button;
+        }),
+      );
+      modifierSelect.replaceChildren(
+        ...KEYBOARD_MODIFIERS.map(([label, value]) => {
+          const option = document.createElement("option");
+          option.value = String(value);
+          option.textContent = label === "None" ? "なし" : label;
+          return option;
+        }),
+      );
+      const noneOption = document.createElement("option");
+      noneOption.value = "0";
+      noneOption.textContent = "None";
+      secondSelect.replaceChildren(
+        noneOption,
+        ...KEYBOARD_KEYS.map(([label, usage]) => {
+          const option = document.createElement("option");
+          option.value = String(usage);
+          option.textContent = label;
+          return option;
+        }),
+      );
+
+      const keyboardChoiceWithControls = (usage: number, label: string): KeymapChoice => {
+        const modifier = Number(modifierSelect.value);
+        const secondUsage = Number(secondSelect.value);
+        const modifierName = KEYBOARD_MODIFIERS.find(([, value]) => value === modifier)?.[0];
+        const secondLabel = KEYBOARD_KEYS.find(([, candidate]) => candidate === secondUsage)?.[0];
+        return {
+          kind: "keyboard",
+          modifier,
+          usage,
+          secondUsage,
+          label: `${modifierName && modifierName !== "None" ? `${modifierName} + ` : ""}${label}${secondLabel ? ` + ${secondLabel}` : ""}`,
+        };
+      };
+      const updateKeyboardChoice = () => {
+        const currentChoice = pendingChoice;
+        if (currentChoice?.kind !== "keyboard") return;
+        const key = KEYBOARD_KEYS.find(([, usage]) => usage === currentChoice.usage) ?? KEYBOARD_KEYS[0];
+        pendingChoice = keyboardChoiceWithControls(key[1], key[0]);
+        updateDialogSelection();
+      };
+      modifierSelect.addEventListener("change", updateKeyboardChoice);
+      secondSelect.addEventListener("change", updateKeyboardChoice);
+      byId("keymap-keyboard-grid").replaceChildren(
+        ...KEYBOARD_KEYS.map(([label, usage]) => {
+          const button = document.createElement("button");
+          button.className = "key-choice";
+          button.type = "button";
+          button.textContent = label;
+          button.dataset.keymapChoice = `keyboard:${usage}`;
+          button.addEventListener("click", () => {
+            pendingChoice = keyboardChoiceWithControls(usage, label);
+            updateDialogSelection();
+          });
+          return button;
+        }),
+      );
+    }
+
     if (pendingChoice?.kind === "keyboard") {
       modifierSelect.value = String(pendingChoice.modifier);
       secondSelect.value = String(pendingChoice.secondUsage);
@@ -197,44 +246,6 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
       modifierSelect.value = "0";
       secondSelect.value = "0";
     }
-
-    const keyboardChoiceWithControls = (usage: number, label: string): KeymapChoice => {
-      const modifier = Number(modifierSelect.value);
-      const secondUsage = Number(secondSelect.value);
-      const modifierName = KEYBOARD_MODIFIERS.find(([, value]) => value === modifier)?.[0];
-      const secondLabel = KEYBOARD_KEYS.find(([, candidate]) => candidate === secondUsage)?.[0];
-      return {
-        kind: "keyboard",
-        modifier,
-        usage,
-        secondUsage,
-        label: `${modifierName && modifierName !== "None" ? `${modifierName} + ` : ""}${label}${secondLabel ? ` + ${secondLabel}` : ""}`,
-      };
-    };
-    const updateKeyboardChoice = () => {
-      const currentChoice = pendingChoice;
-      if (currentChoice?.kind !== "keyboard") return;
-      const key = KEYBOARD_KEYS.find(([, usage]) => usage === currentChoice.usage) ?? KEYBOARD_KEYS[0];
-      pendingChoice = keyboardChoiceWithControls(key[1], key[0]);
-      updateDialogSelection();
-    };
-    modifierSelect.onchange = updateKeyboardChoice;
-    secondSelect.onchange = updateKeyboardChoice;
-
-    byId("keymap-keyboard-grid").replaceChildren(
-      ...KEYBOARD_KEYS.map(([label, usage]) => {
-        const button = document.createElement("button");
-        button.className = "key-choice";
-        button.type = "button";
-        button.textContent = label;
-        button.dataset.keymapChoice = `keyboard:${usage}`;
-        button.addEventListener("click", () => {
-          pendingChoice = keyboardChoiceWithControls(usage, label);
-          updateDialogSelection();
-        });
-        return button;
-      }),
-    );
   }
 
   function setDialogMode(mode: "controller" | "keyboard"): void {
@@ -272,7 +283,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
   function confirmDialog(): void {
     if (activeSlot === null || pendingChoice === null) return;
     keymapDraft[activeSlot] = encodeKeymapChoice(pendingChoice);
-    renderRows();
+    updateRow(activeSlot);
     renderSummary();
     closeDialog();
     host.markDirty();

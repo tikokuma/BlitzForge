@@ -8,13 +8,21 @@ import type { CurveSettings, PollingMeasurement } from "../models";
 
 type DiagnosticTab = "viewer" | "polling";
 
+type DiagnosticStickSettings = {
+  leftStick: { curve: CurveSettings; circularAlgorithm: boolean };
+  rightStick: { curve: CurveSettings; circularAlgorithm: boolean };
+};
+
 type InputDiagnosticsOptions = {
   getDeviceIdentifiers: () => readonly string[];
-  getStickSettings: () => {
-    leftStick: { curve: CurveSettings; circularAlgorithm: boolean };
-    rightStick: { curve: CurveSettings; circularAlgorithm: boolean };
-  };
+  getStickSettings: () => DiagnosticStickSettings;
   measurePollingRate: () => Promise<PollingMeasurement>;
+};
+
+export type InputDiagnostics = {
+  setup: () => void;
+  show: () => void;
+  hide: () => void;
 };
 
 const TAB_IDS: Record<DiagnosticTab, string> = {
@@ -38,6 +46,18 @@ const clamp = (value: number, min: number, max: number): number =>
 
 const GRID_RINGS = [0.5, 1] as const;
 const POLLING_DISPLAY_SAMPLE_COUNT = 5;
+const DISPLAY_PRECISION = 1_000;
+
+type CanvasSurface = {
+  context: CanvasRenderingContext2D;
+  width: number;
+  height: number;
+  scale: number;
+  layoutVersion: number;
+};
+
+const canvasSurfaces = new WeakMap<HTMLCanvasElement, CanvasSurface>();
+let canvasLayoutVersion = 0;
 
 function addPollingDisplaySample(samples: number[], value: number): number {
   samples.push(value);
@@ -53,8 +73,14 @@ function readButtonValue(gamepad: Gamepad, index: number): number {
   return clamp(gamepad.buttons[index]?.value ?? 0, 0, 1);
 }
 
-function readButtonState(gamepad: Gamepad): boolean[] {
-  return BUTTON_LABELS.map((_, index) => gamepad.buttons[index]?.pressed || readButtonValue(gamepad, index) >= 0.5);
+function readButtonMask(gamepad: Gamepad): number {
+  let mask = 0;
+  for (let index = 0; index < BUTTON_LABELS.length; index += 1) {
+    if (gamepad.buttons[index]?.pressed || readButtonValue(gamepad, index) >= 0.5) {
+      mask |= 1 << index;
+    }
+  }
+  return mask;
 }
 
 type GamepadNavigator = { getGamepads?: () => ArrayLike<Gamepad | null> };
@@ -90,24 +116,45 @@ function pointFromGamepad(gamepad: Gamepad, xAxis: number, yAxis: number): Stick
 }
 
 function setText(id: string, value: string): void {
-  byId(id).textContent = value;
+  const element = byId(id);
+  if (element.textContent !== value) element.textContent = value;
 }
 
 function canvasContext(canvas: HTMLCanvasElement): { context: CanvasRenderingContext2D; width: number; height: number } | null {
-  const width = Math.max(180, canvas.getBoundingClientRect().width || 300);
-  const height = Math.max(140, canvas.getBoundingClientRect().height || width);
   const scale = window.devicePixelRatio || 1;
-  const pixelWidth = Math.round(width * scale);
-  const pixelHeight = Math.round(height * scale);
-  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-    canvas.width = pixelWidth;
-    canvas.height = pixelHeight;
+  let surface = canvasSurfaces.get(canvas);
+  if (surface?.scale !== scale || surface.layoutVersion !== canvasLayoutVersion) {
+    const bounds = canvas.getBoundingClientRect();
+    const width = Math.max(180, bounds.width || 300);
+    const height = Math.max(140, bounds.height || width);
+    const pixelWidth = Math.round(width * scale);
+    const pixelHeight = Math.round(height * scale);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    const context = surface?.context ?? canvas.getContext("2d");
+    if (!context) return null;
+    surface = { context, width, height, scale, layoutVersion: canvasLayoutVersion };
+    canvasSurfaces.set(canvas, surface);
   }
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.setTransform(scale, 0, 0, scale, 0, 0);
-  context.clearRect(0, 0, width, height);
-  return { context, width, height };
+  surface.context.setTransform(scale, 0, 0, scale, 0, 0);
+  surface.context.clearRect(0, 0, surface.width, surface.height);
+  return surface;
+}
+
+function pointsEqual(left: StickPoint, right: StickPoint): boolean {
+  return Math.round(left.x * DISPLAY_PRECISION) === Math.round(right.x * DISPLAY_PRECISION)
+    && Math.round(left.y * DISPLAY_PRECISION) === Math.round(right.y * DISPLAY_PRECISION);
+}
+
+function samplesEqual(left: DiagnosticSample | null, right: DiagnosticSample | null): boolean {
+  if (left === null || right === null) return left === right;
+  return pointsEqual(left.raw.leftStick, right.raw.leftStick)
+    && pointsEqual(left.raw.rightStick, right.raw.rightStick)
+    && pointsEqual(left.simulation.leftStick, right.simulation.leftStick)
+    && pointsEqual(left.simulation.rightStick, right.simulation.rightStick)
+    && left.raw.buttonMask === right.raw.buttonMask;
 }
 
 function drawGrid(context: CanvasRenderingContext2D, width: number, height: number): void {
@@ -198,7 +245,7 @@ function drawPollingChart(canvas: HTMLCanvasElement, intervals: readonly number[
   context.fillText(`${formatMs(min)} – ${formatMs(max)}`, 10, height - 5);
 }
 
-export function createInputDiagnostics(options: InputDiagnosticsOptions) {
+export function createInputDiagnostics(options: InputDiagnosticsOptions): InputDiagnostics {
   let initialized = false;
   let visible = false;
   let currentTab: DiagnosticTab = "viewer";
@@ -216,9 +263,21 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
   let pollingRequestId = 0;
   let selectedGamepadIndex: number | null = null;
   let buttonStateElements: HTMLSpanElement[] = [];
+  let renderedButtonStates: boolean[] = [];
+  let renderedSample: DiagnosticSample | null | undefined;
+  let stickSettings: DiagnosticStickSettings | null = null;
+  let windowActive = !document.hidden && document.hasFocus();
+
+  function isWindowActive(): boolean {
+    return windowActive && !document.hidden && document.hasFocus();
+  }
 
   function isPollingViewActive(): boolean {
-    return visible && currentTab === "polling";
+    return visible && isWindowActive() && currentTab === "polling";
+  }
+
+  function isViewerViewActive(): boolean {
+    return visible && isWindowActive() && currentTab === "viewer";
   }
 
   function findGamepad(): Gamepad | null {
@@ -261,12 +320,12 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
   function readSample(gamepad: Gamepad): DiagnosticSample {
     const rawLeft = pointFromGamepad(gamepad, 0, 1);
     const rawRight = pointFromGamepad(gamepad, 2, 3);
-    const settings = options.getStickSettings();
+    const settings = stickSettings ??= options.getStickSettings();
     const sample: DiagnosticSample = {
       raw: {
         leftStick: rawLeft,
         rightStick: rawRight,
-        buttons: readButtonState(gamepad),
+        buttonMask: readButtonMask(gamepad),
       },
       simulation: {
         leftStick: simulateStickInput(
@@ -332,9 +391,14 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
         return item;
       });
       container.replaceChildren(...buttonStateElements);
+      renderedButtonStates = [];
     }
     for (let index = 0; index < buttonStateElements.length; index += 1) {
-      buttonStateElements[index]?.classList.toggle("pressed", sample?.raw.buttons[index] ?? false);
+      const pressed = sample !== null && (sample.raw.buttonMask & (1 << index)) !== 0;
+      if (renderedButtonStates[index] !== pressed) {
+        buttonStateElements[index]?.classList.toggle("pressed", pressed);
+        renderedButtonStates[index] = pressed;
+      }
     }
   }
 
@@ -345,19 +409,34 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
 
   function renderViewer(): void {
     const sample = currentSample;
+    if (renderedSample !== undefined && samplesEqual(renderedSample, sample)) return;
+    const previous = renderedSample;
     const rawLeft = sample?.raw.leftStick ?? { x: 0, y: 0 };
     const simulationLeft = sample?.simulation.leftStick ?? { x: 0, y: 0 };
     const rawRight = sample?.raw.rightStick ?? { x: 0, y: 0 };
     const simulationRight = sample?.simulation.rightStick ?? { x: 0, y: 0 };
-    drawStickPosition(byId<HTMLCanvasElement>("diagnostics-left-stick-canvas"), rawLeft, simulationLeft);
-    drawStickPosition(byId<HTMLCanvasElement>("diagnostics-right-stick-canvas"), rawRight, simulationRight);
-    renderStickReadout("left-stick", rawLeft);
-    renderStickReadout("right-stick", rawRight);
-    renderButtons(sample);
+    const leftChanged = !previous || !sample
+      || !pointsEqual(previous.raw.leftStick, sample.raw.leftStick)
+      || !pointsEqual(previous.simulation.leftStick, sample.simulation.leftStick);
+    const rightChanged = !previous || !sample
+      || !pointsEqual(previous.raw.rightStick, sample.raw.rightStick)
+      || !pointsEqual(previous.simulation.rightStick, sample.simulation.rightStick);
+    if (leftChanged) {
+      drawStickPosition(byId<HTMLCanvasElement>("diagnostics-left-stick-canvas"), rawLeft, simulationLeft);
+      renderStickReadout("left-stick", rawLeft);
+    }
+    if (rightChanged) {
+      drawStickPosition(byId<HTMLCanvasElement>("diagnostics-right-stick-canvas"), rawRight, simulationRight);
+      renderStickReadout("right-stick", rawRight);
+    }
+    const buttonMaskChanged = previous === undefined
+      || previous?.raw.buttonMask !== sample?.raw.buttonMask;
+    if (buttonMaskChanged) renderButtons(sample);
+    renderedSample = sample;
   }
 
   function render(): void {
-    if (!initialized) return;
+    if (!initialized || !visible || !isWindowActive()) return;
     if (currentTab === "viewer") renderViewer();
     else renderPolling();
   }
@@ -390,11 +469,13 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
       }
     } finally {
       pollingBusy = false;
-      if (requestId === pollingRequestId) {
-        renderPolling();
-        schedulePollingMeasurement(500);
-      } else if (isPollingViewActive()) {
-        schedulePollingMeasurement();
+      if (isPollingViewActive()) {
+        if (requestId === pollingRequestId) {
+          renderPolling();
+          schedulePollingMeasurement(500);
+        } else {
+          schedulePollingMeasurement();
+        }
       }
     }
   }
@@ -415,6 +496,8 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
 
   function setTab(next: DiagnosticTab): void {
     currentTab = next;
+    canvasLayoutVersion += 1;
+    renderedSample = undefined;
     for (const candidate of Object.keys(TAB_IDS) as DiagnosticTab[]) {
       const active = candidate === next;
       byId(TAB_IDS[candidate]).classList.toggle("active", active);
@@ -434,7 +517,7 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
 
   function tick(): void {
     animationFrame = null;
-    if (!visible || currentTab !== "viewer") return;
+    if (!isViewerViewActive()) return;
     const gamepad = findGamepad();
     if (gamepad) {
       currentSample = readSample(gamepad);
@@ -448,7 +531,7 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
   }
 
   function start(): void {
-    if (!visible || currentTab !== "viewer") return;
+    if (!isViewerViewActive()) return;
     if (animationFrame === null) animationFrame = window.requestAnimationFrame(tick);
   }
 
@@ -459,12 +542,39 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
     }
   }
 
+  function syncWindowActivity(focused: boolean): void {
+    const nextActive = focused && !document.hidden && document.hasFocus();
+    const wasActive = windowActive;
+    windowActive = nextActive;
+    if (!nextActive) {
+      if (wasActive) {
+        stop();
+        stopPollingMeasurement();
+      }
+      return;
+    }
+    if (!visible) return;
+    renderedSample = undefined;
+    if (currentTab === "viewer") start();
+    else schedulePollingMeasurement();
+    render();
+  }
+
   function setup(): void {
     if (initialized) return;
     initialized = true;
     for (const [id, next] of Object.entries(TAB_IDS) as Array<[DiagnosticTab, string]>) {
       byId(next).addEventListener("click", () => setTab(id));
     }
+    window.addEventListener("resize", () => {
+      canvasLayoutVersion += 1;
+      renderedSample = undefined;
+    });
+    document.addEventListener("visibilitychange", () => {
+      syncWindowActivity(!document.hidden);
+    });
+    window.addEventListener("blur", () => syncWindowActivity(false));
+    window.addEventListener("focus", () => syncWindowActivity(true));
     setTab("viewer");
   }
 
@@ -472,6 +582,10 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions) {
     setup,
     show(): void {
       visible = true;
+      stickSettings = options.getStickSettings();
+      canvasLayoutVersion += 1;
+      renderedSample = undefined;
+      syncWindowActivity(true);
       if (currentTab === "viewer") start();
       else schedulePollingMeasurement();
       render();
