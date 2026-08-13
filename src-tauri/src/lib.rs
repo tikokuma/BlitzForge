@@ -74,7 +74,6 @@ struct CommitProfileInput {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommitResult {
-    profile_requested: bool,
     profile_saved: bool,
     macro_requested: bool,
     macro_saved: bool,
@@ -93,13 +92,7 @@ struct CommitResult {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommitPreview {
-    profile_requested: bool,
-    macro_requested: bool,
-    apply_eligible: bool,
-    device_settings_requested: bool,
     changes: Vec<device::SettingChange>,
-    warnings: Vec<String>,
-    apply_unavailable_reason: Option<String>,
 }
 
 struct PreparedCommit {
@@ -107,14 +100,12 @@ struct PreparedCommit {
     profile_requested: bool,
     macro_requested: bool,
     macro_write: Option<MacroCommitInput>,
-    apply_eligible: bool,
     apply_requested: bool,
     device_settings_requested: bool,
     device_settings: Option<DeviceSettingsInput>,
     device_path: Option<String>,
     changes: Vec<device::SettingChange>,
     warnings: Vec<String>,
-    apply_unavailable_reason: Option<String>,
 }
 
 async fn run_locked<State, Output, Operation>(
@@ -148,9 +139,6 @@ struct ProfileDocumentView {
     firmware_version: String,
     zkm_version: String,
     created_at: String,
-    saved: bool,
-    supported: bool,
-    incompatibility_reason: Option<String>,
     snapshot: Option<profiles::ProfileSnapshot>,
     #[serde(flatten)]
     summary: ProfileSummary,
@@ -170,9 +158,6 @@ fn saved_profile_view(
         firmware_version: document.firmware_version,
         zkm_version: document.zkm_version,
         created_at: document.created_at,
-        saved: true,
-        supported: true,
-        incompatibility_reason: None,
         snapshot: Some(document.snapshot),
         summary,
     })
@@ -196,9 +181,6 @@ fn transient_profile_view(
         firmware_version,
         zkm_version,
         created_at: String::new(),
-        saved: false,
-        supported: true,
-        incompatibility_reason: None,
         snapshot: None,
         summary,
     }
@@ -288,13 +270,7 @@ async fn preview_profile_commit(input: CommitProfileInput) -> Result<CommitPrevi
         let mut input = input;
         let prepared = prepare_commit(&mut input)?;
         Ok(CommitPreview {
-            profile_requested: prepared.profile_requested,
-            macro_requested: prepared.macro_requested,
-            apply_eligible: prepared.apply_eligible,
-            device_settings_requested: prepared.device_settings_requested,
             changes: prepared.changes,
-            warnings: prepared.warnings,
-            apply_unavailable_reason: prepared.apply_unavailable_reason,
         })
     })
     .await
@@ -399,7 +375,6 @@ fn commit_profile_blocking(
     }
 
     Ok(CommitResult {
-        profile_requested,
         profile_saved,
         macro_requested,
         macro_saved,
@@ -457,25 +432,18 @@ fn prepare_commit(input: &mut CommitProfileInput) -> Result<PreparedCommit, Stri
         device::validate_device_settings(candidate)?;
     }
 
-    let has_changes = profile_requested || macro_requested || device_settings_requested;
     let device_path = input
         .device_path
         .clone()
         .filter(|path| !path.trim().is_empty());
     let profile_uuid = input.profile.device_uuid.clone();
     let device_uuid = input.device_uuid.as_deref().unwrap_or_default();
-    let apply_eligible =
-        has_changes && device_path.is_some() && device_uuid_matches(&profile_uuid, device_uuid);
+    let apply_eligible = device_path.is_some() && device_uuid_matches(&profile_uuid, device_uuid);
     let apply_requested = matches!(input.mode, CommitMode::SaveAndApply) && apply_eligible;
     let apply_unavailable_reason = if apply_eligible {
         None
     } else {
-        apply_unavailable_reason(
-            has_changes,
-            device_path.as_deref(),
-            &profile_uuid,
-            device_uuid,
-        )
+        apply_unavailable_reason(device_path.as_deref(), &profile_uuid, device_uuid)
     };
     let mut warnings = Vec::new();
     if matches!(input.mode, CommitMode::SaveAndApply) && !apply_requested {
@@ -543,26 +511,20 @@ fn prepare_commit(input: &mut CommitProfileInput) -> Result<PreparedCommit, Stri
         profile_requested,
         macro_requested,
         macro_write,
-        apply_eligible,
         apply_requested,
         device_settings_requested,
         device_settings,
         device_path,
         changes,
         warnings,
-        apply_unavailable_reason,
     })
 }
 
 fn apply_unavailable_reason(
-    has_changes: bool,
     device_path: Option<&str>,
     profile_uuid: &str,
     device_uuid: &str,
 ) -> Option<String> {
-    if !has_changes {
-        return Some("変更がないため、適用できる内容がありません。".into());
-    }
     if device_path.is_none() {
         return Some("コントローラーが接続されていないため、保存のみを利用できます。".into());
     }

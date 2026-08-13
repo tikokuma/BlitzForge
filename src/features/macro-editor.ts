@@ -53,16 +53,16 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   }
 
   function headerControlsDiffer(record: readonly number[]): boolean {
-    const mKey = Number(byId<HTMLSelectElement>("macro-m-key-select").value);
-    const runKey = Number(byId<HTMLSelectElement>("macro-run-key-select").value);
-    const repeat = Number(byId<HTMLInputElement>("macro-repeat").value);
+    const mKey = Number(byId("macro-m-key-select", HTMLSelectElement).value);
+    const runKey = Number(byId("macro-run-key-select", HTMLSelectElement).value);
+    const repeat = Number(byId("macro-repeat", HTMLInputElement).value);
     if (!Number.isInteger(mKey) || mKey < 0 || mKey > 0xff
       || !Number.isInteger(runKey) || runKey < 0 || runKey > 0xff
       || !Number.isInteger(repeat) || repeat < 0 || repeat > 0xffff) {
       return true;
     }
-    const flags = (byId<HTMLInputElement>("macro-run-after-release").checked ? 1 : 0)
-      | (byId<HTMLInputElement>("macro-loop").checked ? 2 : 0);
+    const flags = (byId("macro-run-after-release", HTMLInputElement).checked ? 1 : 0)
+      | (byId("macro-loop", HTMLInputElement).checked ? 2 : 0);
     return record[5] !== mKey
       || record[6] !== runKey
       || (((record[7] ?? 0) & 0x03) !== flags)
@@ -99,7 +99,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
 
   function syncActions(): void {
     const busy = host.isBusy();
-    const addButton = byId<HTMLButtonElement>("add-macro-step");
+    const addButton = byId("add-macro-step", HTMLButtonElement);
     const disabled = busy
       || draftRecord === null
       || macroStepCount(draftRecord) >= MACRO_MAX_STEPS;
@@ -107,7 +107,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   }
 
   function setSelectValue(id: string, value: number): void {
-    const select = byId<HTMLSelectElement>(id);
+    const select = byId(id, HTMLSelectElement);
     select.querySelector("option[data-generated]")?.remove();
     const textValue = String(value);
     if (!Array.from(select.options).some((option) => option.value === textValue)) {
@@ -122,15 +122,15 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
 
   function renderHeader(record: readonly number[]): void {
     const header = readMacroHeader(record);
-    byId<HTMLInputElement>("macro-repeat").value = String(header.repeat);
+    byId("macro-repeat", HTMLInputElement).value = String(header.repeat);
     setSelectValue("macro-m-key-select", header.mKey);
     setSelectValue("macro-run-key-select", header.runKey);
-    byId<HTMLInputElement>("macro-run-after-release").checked = header.runAfterRelease;
-    byId<HTMLInputElement>("macro-loop").checked = header.loop;
+    byId("macro-run-after-release", HTMLInputElement).checked = header.runAfterRelease;
+    byId("macro-loop", HTMLInputElement).checked = header.loop;
   }
 
   function readInteger(id: string, maximum: number): number {
-    const value = Number(byId<HTMLInputElement>(id).value);
+    const value = Number(byId(id, HTMLInputElement).value);
     if (!Number.isInteger(value) || value < 0 || value > maximum) {
       throw new Error(`${id} は0〜${maximum}の整数で入力してください`);
     }
@@ -138,8 +138,8 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   }
 
   function updateHeaderFromControls(record: readonly number[]): number[] {
-    const mKey = Number(byId<HTMLSelectElement>("macro-m-key-select").value);
-    const runKey = Number(byId<HTMLSelectElement>("macro-run-key-select").value);
+    const mKey = Number(byId("macro-m-key-select", HTMLSelectElement).value);
+    const runKey = Number(byId("macro-run-key-select", HTMLSelectElement).value);
     if (!Number.isInteger(mKey) || !Number.isInteger(runKey)) {
       throw new Error("マクロの呼び出しキーを選択してください");
     }
@@ -147,8 +147,8 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       mKey,
       runKey,
       repeat: readInteger("macro-repeat", 0xffff),
-      runAfterRelease: byId<HTMLInputElement>("macro-run-after-release").checked,
-      loop: byId<HTMLInputElement>("macro-loop").checked,
+      runAfterRelease: byId("macro-run-after-release", HTMLInputElement).checked,
+      loop: byId("macro-loop", HTMLInputElement).checked,
     });
   }
 
@@ -313,11 +313,11 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     if (slot !== selectedSlot && confirmDiscard && !confirmDiscardChanges(
       "スロットを切り替えると、編集中のマクロ変更が失われます。",
     )) {
-      byId<HTMLSelectElement>("macro-slot").value = String(selectedSlot);
+      byId("macro-slot", HTMLSelectElement).value = String(selectedSlot);
       return;
     }
     selectedSlot = slot;
-    byId<HTMLSelectElement>("macro-slot").value = String(slot);
+    byId("macro-slot", HTMLSelectElement).value = String(slot);
     byId("macro-editor-title").textContent = `スロット ${slot + 1} の編集`;
     const validRecord = isMacroRecord(selected.rawRecord);
     originalRecord = validRecord ? selected.rawRecord.slice() : null;
@@ -349,7 +349,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
 
   function renderSummary(nextSummary: MacroSummary, confirmDiscard = true): void {
     summary = nextSummary;
-    const currentSlot = Number(byId<HTMLSelectElement>("macro-slot").value);
+    const currentSlot = Number(byId("macro-slot", HTMLSelectElement).value);
     byId("macro-slots").replaceChildren(
       ...nextSummary.slots.map((slot) => {
         const button = document.createElement("button");
@@ -407,7 +407,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
       draftRecord = updateHeaderFromControls(draftRecord);
       updateDirty();
       renderHeader(draftRecord);
-      const slot = Number(byId<HTMLSelectElement>("macro-slot").value) + 1;
+      const slot = Number(byId("macro-slot", HTMLSelectElement).value) + 1;
       byId("macro-slot-details").textContent = `スロット ${slot}を編集中です。`;
       host.syncHostActions();
     } catch (error) {
@@ -417,7 +417,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
 
   function setup(): void {
     byId("refresh-macros").addEventListener("click", () => void refresh());
-    byId<HTMLSelectElement>("macro-slot").addEventListener("change", (event) => {
+    byId("macro-slot", HTMLSelectElement).addEventListener("change", (event) => {
       selectSlot(Number((event.target as HTMLSelectElement).value));
     });
     byId("add-macro-step").addEventListener("click", addStep);

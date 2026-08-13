@@ -40,7 +40,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
   }
 
   function renderRapidFireControls(): void {
-    const speed = byId<HTMLSelectElement>("rapid-speed");
+    const speed = byId("rapid-speed", HTMLSelectElement);
     speed.querySelector("option[data-generated]")?.remove();
     const speedIndex = rapidFireDraft.speedIndex;
     if (speedIndex !== null && ![0, 1, 2].includes(speedIndex)) {
@@ -153,17 +153,17 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
 
   function updateDialogSelection(): void {
     const selected = keymapChoiceKey(pendingChoice);
-    byId<HTMLDialogElement>("keymap-dialog")
+    byId("keymap-dialog", HTMLDialogElement)
       .querySelectorAll<HTMLButtonElement>("[data-keymap-choice]")
       .forEach((button) => {
         button.classList.toggle("selected", button.dataset.keymapChoice === selected);
       });
-    byId<HTMLButtonElement>("keymap-dialog-confirm").disabled = pendingChoice === null;
+    byId("keymap-dialog-confirm", HTMLButtonElement).disabled = pendingChoice === null;
   }
 
   function renderChoiceButtons(): void {
-    const modifierSelect = byId<HTMLSelectElement>("keymap-keyboard-modifier");
-    const secondSelect = byId<HTMLSelectElement>("keymap-keyboard-second");
+    const modifierSelect = byId("keymap-keyboard-modifier", HTMLSelectElement);
+    const secondSelect = byId("keymap-keyboard-second", HTMLSelectElement);
     if (!choicesInitialized) {
       choicesInitialized = true;
       byId("keymap-controller-grid").replaceChildren(
@@ -266,7 +266,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
     byId("keymap-dialog-subtitle").textContent = `${source} のマッピングを選択してください。`;
     renderChoiceButtons();
     setDialogMode(pendingChoice?.kind === "keyboard" ? "keyboard" : "controller");
-    byId<HTMLDialogElement>("keymap-dialog").showModal();
+    byId("keymap-dialog", HTMLDialogElement).showModal();
   }
 
   function resetDialog(): void {
@@ -275,7 +275,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
   }
 
   function closeDialog(): void {
-    const dialog = byId<HTMLDialogElement>("keymap-dialog");
+    const dialog = byId("keymap-dialog", HTMLDialogElement);
     if (dialog.open) dialog.close();
     resetDialog();
   }
@@ -314,7 +314,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
   }
 
   function setup(): void {
-    byId<HTMLSelectElement>("rapid-speed").addEventListener("change", (event) => {
+    byId("rapid-speed", HTMLSelectElement).addEventListener("change", (event) => {
       const value = (event.target as HTMLSelectElement).value;
       rapidFireDraft.speedIndex = value === "unknown" ? null : Number(value);
       renderRapidFireControls();
@@ -325,7 +325,7 @@ export function createKeymapEditor(host: KeymapEditorHost): KeymapEditor {
     byId("keymap-dialog-close").addEventListener("click", closeDialog);
     byId("keymap-dialog-cancel").addEventListener("click", closeDialog);
     byId("keymap-dialog-confirm").addEventListener("click", confirmDialog);
-    byId<HTMLDialogElement>("keymap-dialog").addEventListener("cancel", resetDialog);
+    byId("keymap-dialog", HTMLDialogElement).addEventListener("cancel", resetDialog);
   }
 
   return { readSettings, render, setup };

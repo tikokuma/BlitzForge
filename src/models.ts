@@ -2,6 +2,7 @@ export type DeviceSummary = {
   vendorProduct: string;
   usage: string;
   product: string;
+  profileName: string;
   path: string;
 };
 
@@ -33,10 +34,7 @@ export type ProfileListEntry = {
   firmwareVersion: string;
   zkmVersion: string;
   createdAt: string;
-  profileLength: number;
   profileVersion: string | null;
-  supported: boolean;
-  incompatibilityReason: string | null;
   active: boolean;
 };
 
@@ -101,9 +99,6 @@ export type ProfileDocument = ProfileSummary & {
   firmwareVersion: string;
   zkmVersion: string;
   createdAt: string;
-  saved: boolean;
-  supported: boolean;
-  incompatibilityReason: string | null;
   snapshot: ProfileSnapshot | null;
 };
 
@@ -146,17 +141,10 @@ export type SettingChange = {
 };
 
 export type CommitPreview = {
-  profileRequested: boolean;
-  macroRequested: boolean;
-  applyEligible: boolean;
-  deviceSettingsRequested: boolean;
   changes: SettingChange[];
-  warnings: string[];
-  applyUnavailableReason: string | null;
 };
 
 export type CommitResult = {
-  profileRequested: boolean;
   profileSaved: boolean;
   macroRequested: boolean;
   macroSaved: boolean;

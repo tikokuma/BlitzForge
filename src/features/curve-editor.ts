@@ -70,23 +70,23 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
   let draggingPoint: CurvePoint | null = null;
 
   function readRangeValue(id: string): number {
-    return Number(byId<HTMLInputElement>(id).value);
+    return Number(byId(id, HTMLInputElement).value);
   }
 
   function setRangeControl(id: string, value: number): void {
-    byId<HTMLInputElement>(id).value = String(value);
+    byId(id, HTMLInputElement).value = String(value);
     updateRangeOutput(id);
   }
 
   function clampRangeValue(id: string, value: number): number {
-    const input = byId<HTMLInputElement>(id);
+    const input = byId(id, HTMLInputElement);
     const min = Number(input.min);
     const max = Number(input.max);
     return Math.min(max, Math.max(min, Math.round(value)));
   }
 
   function updateRangeOutput(id: string): void {
-    const value = byId<HTMLInputElement>(id).value;
+    const value = byId(id, HTMLInputElement).value;
     const target = byId(`${id}-value`);
     if (target instanceof HTMLInputElement) target.value = value;
     else target.textContent = value;
@@ -118,16 +118,16 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     const yBounds = curveYBounds(curve);
     const point1 = svgPoint(curve.point1X, curve.point1Y);
     const point2 = svgPoint(curve.point2X, curve.point2Y);
-    byId<SVGPathElement>("curve-line").setAttribute(
+    byId("curve-line", SVGPathElement).setAttribute(
       "d",
       `M ${formatSvgPoint(svgPoint(0, yBounds.min))} L ${formatSvgPoint(point1)} L ${formatSvgPoint(point2)} L ${formatSvgPoint(svgPoint(100, yBounds.max))}`,
     );
     for (const [id, point] of [["curve-point1", point1], ["curve-point2", point2]] as const) {
-      byId<SVGCircleElement>(id).setAttribute("cx", String(point[0]));
-      byId<SVGCircleElement>(id).setAttribute("cy", String(point[1]));
+      byId(id, SVGCircleElement).setAttribute("cx", String(point[0]));
+      byId(id, SVGCircleElement).setAttribute("cy", String(point[1]));
     }
-    const centerCompensation = byId<SVGRectElement>("curve-center-compensation");
-    const edgeCompensation = byId<SVGRectElement>("curve-edge-compensation");
+    const centerCompensation = byId("curve-center-compensation", SVGRectElement);
+    const edgeCompensation = byId("curve-edge-compensation", SVGRectElement);
     const centerCompensationHeight = Math.max(0, -curve.center) * 2;
     const edgeCompensationHeight = Math.max(0, -curve.edge) * 2;
     centerCompensation.setAttribute("y", String(220 - centerCompensationHeight));
@@ -154,7 +154,7 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
   }
 
   function syncActiveRectangleAlgorithm(): void {
-    rectangleAlgorithmDraft[selectedStick] = byId<HTMLInputElement>("rectangle-algorithm").checked;
+    rectangleAlgorithmDraft[selectedStick] = byId("rectangle-algorithm", HTMLInputElement).checked;
   }
 
   function selectStick(stick: Stick): void {
@@ -164,7 +164,7 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     }
     selectedStick = stick;
     setActiveCurve(curveDrafts[stick]);
-    byId<HTMLInputElement>("rectangle-algorithm").checked = rectangleAlgorithmDraft[stick];
+    byId("rectangle-algorithm", HTMLInputElement).checked = rectangleAlgorithmDraft[stick];
     const left = stick === "leftStick";
     byId("stick-left-tab").classList.toggle("active", left);
     byId("stick-right-tab").classList.toggle("active", !left);
@@ -192,13 +192,13 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
   }
 
   function updateCurveFromDirectInput(id: string): void {
-    const input = byId<HTMLInputElement>(`${id}-value`);
+    const input = byId(`${id}-value`, HTMLInputElement);
     const raw = input.value.trim();
     if (raw.length === 0) return;
     const parsed = Number(raw);
     if (!Number.isFinite(parsed)) return;
     const value = clampRangeValue(id, parsed);
-    byId<HTMLInputElement>(id).value = String(value);
+    byId(id, HTMLInputElement).value = String(value);
     if (!applyCurveConstraintsForControl(id)) {
       input.value = String(value);
       updateRangeOutput(id);
@@ -207,10 +207,10 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
   }
 
   function commitCurveDirectInput(id: string): void {
-    const input = byId<HTMLInputElement>(`${id}-value`);
+    const input = byId(`${id}-value`, HTMLInputElement);
     const parsed = Number(input.value);
     const value = Number.isFinite(parsed) ? clampRangeValue(id, parsed) : readRangeValue(id);
-    byId<HTMLInputElement>(id).value = String(value);
+    byId(id, HTMLInputElement).value = String(value);
     if (!applyCurveConstraintsForControl(id)) {
       input.value = String(value);
       updateRangeOutput(id);
@@ -219,7 +219,7 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
   }
 
   function setPointFromPointer(point: CurvePoint, event: PointerEvent): void {
-    const svg = byId<SVGSVGElement>("curve-preview");
+    const svg = byId("curve-preview", SVGSVGElement);
     const bounds = svg.getBoundingClientRect();
     if (bounds.width === 0 || bounds.height === 0) return;
 
@@ -228,14 +228,14 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     const x = clampPercentage((svgX - 20) / 2);
     const y = clampPercentage((220 - svgY) / 2);
     const [xId, yId] = curvePointAxes[point];
-    byId<HTMLInputElement>(xId).value = String(x);
-    byId<HTMLInputElement>(yId).value = String(y);
+    byId(xId, HTMLInputElement).value = String(x);
+    byId(yId, HTMLInputElement).value = String(y);
     constrainActiveCurve(point);
     markDirty();
   }
 
   function setupDraggablePoint(id: string, point: CurvePoint): void {
-    const circle = byId<SVGCircleElement>(id);
+    const circle = byId(id, SVGCircleElement);
     circle.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       draggingPoint = point;
@@ -302,12 +302,12 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     byId("stick-right-tab").addEventListener("click", () => selectStick("rightStick"));
     byId("rectangle-algorithm").addEventListener("change", markDirty);
     for (const id of curveRangeIds) {
-      byId<HTMLInputElement>(id).addEventListener("input", () => {
+      byId(id, HTMLInputElement).addEventListener("input", () => {
         if (!applyCurveConstraintsForControl(id)) updateRangeOutput(id);
         markDirty();
       });
-      byId<HTMLInputElement>(`${id}-value`).addEventListener("input", () => updateCurveFromDirectInput(id));
-      byId<HTMLInputElement>(`${id}-value`).addEventListener("change", () => commitCurveDirectInput(id));
+      byId(`${id}-value`, HTMLInputElement).addEventListener("input", () => updateCurveFromDirectInput(id));
+      byId(`${id}-value`, HTMLInputElement).addEventListener("change", () => commitCurveDirectInput(id));
     }
     setupDraggablePoint("curve-point1", "point1");
     setupDraggablePoint("curve-point2", "point2");

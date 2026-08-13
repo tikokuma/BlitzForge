@@ -4,7 +4,9 @@ import {
   loadRememberedActiveProfile,
   rememberActiveProfile,
 } from "./domain/active-profile";
+import { createBusyState } from "./domain/busy-state";
 import { deviceUuidsEqual } from "./domain/profile";
+import { createLatestRequestGuard } from "./domain/latest-request";
 import type { InputDiagnostics } from "./features/input-diagnostics";
 import type { MacroEditor } from "./features/macro-editor";
 import type {
@@ -22,6 +24,7 @@ import { createProfileLibrary, type ProfileLibrary } from "./profile-library";
 import { setupWindowControls } from "./window-controls";
 
 let busy = false;
+const busyState = createBusyState();
 let deviceSession: DeviceSession | null = null;
 let profileList: ProfileListEntry[] = [];
 let editingProfile: ProfileDocument | null = null;
@@ -42,6 +45,7 @@ let profileDataVersion: number | null = null;
 let profileContextRevision = 0;
 let listedProfileContextRevision = -1;
 let focusRefreshTimer: number | null = null;
+const profileRefreshGuard = createLatestRequestGuard();
 
 function clearNotification() {
   if (notificationTimer !== null) {
@@ -80,13 +84,16 @@ function showSuccess(message: string) {
 }
 
 function setBusy(value: boolean) {
-  busy = value;
-  if (value) clearNotification();
+  if (value) busyState.enter();
+  else busyState.leave();
+  const nextBusy = busyState.isBusy();
+  if (nextBusy && !busy) clearNotification();
+  busy = nextBusy;
   syncActions();
 }
 
 function setDisabled(id: string, disabled: boolean) {
-  const button = byId<HTMLButtonElement>(id);
+  const button = byId(id, HTMLButtonElement);
   if (button.disabled !== disabled) button.disabled = disabled;
 }
 
@@ -102,10 +109,12 @@ function syncActions() {
   setDisabled("import-profile", busy);
   setDisabled("new-profile", busy);
   setDisabled("read-device-profile", busy || !deviceSession);
+  setDisabled("apply-profile", busy || !editingProfileCanApply());
   setDisabled("save-profile", busy || editingProfile === null);
   const dirtyIndicator = byId("settings-dirty");
   const hideDirtyIndicator = !settingsEditor.isDirty() && !macroDirty;
   if (dirtyIndicator.hidden !== hideDirtyIndicator) dirtyIndicator.hidden = hideDirtyIndicator;
+  profileLibrary.syncActions();
   macroEditor?.syncActions();
 }
 
@@ -178,15 +187,19 @@ function clearProfile() {
   editingProfile = null;
   settingsEditor.reset();
   byId("settings-profile-name").textContent = "";
-  byId("curve-dirty").hidden = true;
-  byId("settings-dirty").hidden = true;
-  byId("device-dirty").hidden = true;
   macroEditor?.reset();
   syncActions();
 }
 
 function renderProfile(profile: ProfileDocument) {
   byId("settings-profile-name").textContent = profile.name;
+}
+
+function editingProfileCanApply(): boolean {
+  const profile = editingProfile;
+  const session = deviceSession;
+  if (!profile || !session) return false;
+  return profile.deviceUuid.trim().length === 0 || profileMatchesDevice(profile, session);
 }
 
 function showView(view: AppView) {
@@ -277,12 +290,7 @@ function renderSaveDialog(preview: CommitPreview): void {
     }));
   }
   byId("save-dialog-profile-name").textContent = profile.name;
-  byId<HTMLButtonElement>("save-dialog-only").disabled = preview.changes.length === 0;
-  const canApply = preview.applyEligible;
-  byId<HTMLButtonElement>("save-dialog-apply").disabled = !canApply;
-  byId("save-dialog-apply-note").textContent = canApply
-    ? "保存完了後、接続中のコントローラーへ反映します。"
-    : preview.applyUnavailableReason ?? "適用できる変更がありません。";
+  byId("save-dialog-save", HTMLButtonElement).disabled = preview.changes.length === 0;
 }
 
 async function openSaveDialog(): Promise<void> {
@@ -292,7 +300,7 @@ async function openSaveDialog(): Promise<void> {
   try {
     const preview = await backend.previewProfileCommit(buildCommitProfileInput(profile, profile.name, "save"));
     renderSaveDialog(preview);
-    const dialog = byId<HTMLDialogElement>("save-dialog");
+    const dialog = byId("save-dialog", HTMLDialogElement);
     if (!dialog.open) dialog.showModal();
   } catch (error) {
     showError(errorMessage(error));
@@ -302,13 +310,13 @@ async function openSaveDialog(): Promise<void> {
 }
 
 function closeSaveDialog(): void {
-  const dialog = byId<HTMLDialogElement>("save-dialog");
+  const dialog = byId("save-dialog", HTMLDialogElement);
   if (dialog.open) dialog.close();
 }
 
-function chooseSaveMode(mode: SaveMode): void {
+function saveFromDialog(): void {
   closeSaveDialog();
-  void saveProfileDocument(mode);
+  void saveProfileDocument("save");
 }
 
 async function setEditingProfile(profile: ProfileDocument, preserveMacro = false) {
@@ -321,6 +329,7 @@ async function setEditingProfile(profile: ProfileDocument, preserveMacro = false
 
 async function refreshProfiles() {
   const contextRevision = profileContextRevision;
+  const request = profileRefreshGuard.start(contextRevision);
   const result = await backend.listProfiles({
     deviceUuid: deviceSession?.uuid ?? null,
     activeProfile: activeDeviceProfile && deviceSession
@@ -329,6 +338,7 @@ async function refreshProfiles() {
     knownDataVersion: profileDataVersion,
     force: listedProfileContextRevision !== contextRevision,
   });
+  if (!profileRefreshGuard.isCurrent(request, profileContextRevision)) return;
   profileDataVersion = result.dataVersion;
   listedProfileContextRevision = contextRevision;
   if (result.profiles === null) return;
@@ -343,7 +353,6 @@ async function refreshProfiles() {
       entry.deviceUuid,
       entry.profileVersion,
       entry.createdAt,
-      entry.supported,
       entry.active,
     ]),
   ]);
@@ -353,6 +362,7 @@ async function refreshProfiles() {
 }
 
 async function openSavedProfile(id: number) {
+  if (busy) return;
   setBusy(true);
   try {
     await setEditingProfile(await backend.loadSavedProfile(id));
@@ -366,6 +376,7 @@ async function openSavedProfile(id: number) {
 }
 
 async function duplicateProfile(entry: ProfileListEntry) {
+  if (busy) return;
   const name = window.prompt("複製後のプロファイル名", `${entry.name} コピー`);
   if (name === null) return;
   setBusy(true);
@@ -393,6 +404,7 @@ async function duplicateProfile(entry: ProfileListEntry) {
 }
 
 async function renameProfile(entry: ProfileListEntry) {
+  if (busy) return;
   const name = window.prompt("新しいプロファイル名", entry.name);
   if (name === null || name.trim() === entry.name) return;
   setBusy(true);
@@ -419,6 +431,7 @@ async function renameProfile(entry: ProfileListEntry) {
 }
 
 async function deleteProfile(entry: ProfileListEntry) {
+  if (busy) return;
   if (!window.confirm(`「${entry.name}」を削除しますか？`)) return;
   setBusy(true);
   try {
@@ -521,7 +534,7 @@ async function readProfileFromDevice() {
       ...profile,
       name: "コントローラーから読み込んだプロファイル",
       deviceUuid: session.uuid,
-      deviceName: session.device.product,
+      deviceName: session.device.profileName,
       zkmVersion: session.zkmVersion ? String(session.zkmVersion) : "",
     });
     showView("settings");
@@ -533,7 +546,7 @@ async function readProfileFromDevice() {
 }
 
 function closeShareImportDialog(shareCode: string | null): void {
-  const dialog = byId<HTMLDialogElement>("share-import-dialog");
+  const dialog = byId("share-import-dialog", HTMLDialogElement);
   const resolve = shareImportDialogResolve;
   shareImportDialogResolve = null;
   if (dialog.open) dialog.close();
@@ -541,8 +554,8 @@ function closeShareImportDialog(shareCode: string | null): void {
 }
 
 function openShareImportDialog(): Promise<string | null> {
-  const dialog = byId<HTMLDialogElement>("share-import-dialog");
-  const input = byId<HTMLInputElement>("share-import-code");
+  const dialog = byId("share-import-dialog", HTMLDialogElement);
+  const input = byId("share-import-code", HTMLInputElement);
   const note = byId("share-import-dialog-note");
   if (dialog.open) return Promise.resolve(null);
   input.value = "";
@@ -557,7 +570,7 @@ function openShareImportDialog(): Promise<string | null> {
 }
 
 function confirmShareImportDialog(): void {
-  const input = byId<HTMLInputElement>("share-import-code");
+  const input = byId("share-import-code", HTMLInputElement);
   const note = byId("share-import-dialog-note");
   const shareCode = input.value.trim();
   if (!shareCode) {
@@ -605,7 +618,7 @@ async function exportShareCode(profile: ProfileDocument) {
       profile: profile.rawProfile,
       phoneUuid: profile.phoneUuid,
       deviceUuid: profile.deviceUuid || session?.uuid || "",
-      deviceName: profile.deviceName || session?.device.product || "",
+      deviceName: profile.deviceName || session?.device.profileName || "",
       firmwareVersion: profile.firmwareVersion,
       zkmVersion: profile.zkmVersion || (session?.zkmVersion ? String(session.zkmVersion) : ""),
     });
@@ -655,7 +668,7 @@ async function applySavedProfileFromCard(id: number) {
   setBusy(true);
   try {
     const profile = await backend.loadSavedProfile(id);
-    if (!profile.saved || !profile.supported || !profileMatchesDevice(profile, session)) {
+    if (profile.id === null || !profileMatchesDevice(profile, session)) {
       throw new Error("選択したプロファイルは接続中コントローラーに適用できません。");
     }
     await applySavedProfileToDevice(profile, session);
@@ -669,7 +682,7 @@ async function applySavedProfileFromCard(id: number) {
 }
 
 async function applySavedProfileToDevice(profile: ProfileDocument, session: DeviceSession) {
-  if (!profile.saved || profile.id === null || !profile.supported || !profileMatchesDevice(profile, session)) {
+  if (profile.id === null || !profileMatchesDevice(profile, session)) {
     throw new Error("このプロファイルは接続中コントローラーに適用できません。");
   }
   const result = await backend.applyProfile(profile.rawProfile, session.device.path);
@@ -693,7 +706,7 @@ function buildCommitProfileInput(
       name,
       rawProfile: profile.rawProfile,
       deviceUuid: profile.deviceUuid || deviceSession?.uuid || "",
-      deviceName: profile.deviceName || deviceSession?.device.product || "",
+      deviceName: profile.deviceName || deviceSession?.device.profileName || "",
       firmwareVersion: profile.firmwareVersion,
       zkmVersion: profile.zkmVersion || (deviceSession?.zkmVersion ? String(deviceSession.zkmVersion) : ""),
       snapshot: profile.snapshot,
@@ -723,8 +736,9 @@ function commitResultSummary(result: CommitResult): string {
     if (!requested) return "未実行";
     return succeeded ? "成功" : "未完了";
   };
+  const profileStage = result.profileSaved ? "成功" : "未実行";
   return [
-    `プロファイル保存: ${stage(result.profileRequested, result.profileSaved)}`,
+    `プロファイル保存: ${profileStage}`,
     `マクロ保存: ${stage(result.macroRequested, result.macroSaved)}`,
     `適用: ${stage(result.applyRequested, result.profileApplied)}`,
     `デバイス設定保存: ${stage(result.deviceSettingsRequested, result.deviceSettingsSaved)}`,
@@ -742,7 +756,7 @@ function commitWarningMessage(result: CommitResult, prefix = ""): string {
 
 function commitSuccessMessage(result: CommitResult, mode: SaveMode): string {
   if (mode === "apply" && result.profileApplied) {
-    return "保存してコントローラーへ適用しました。";
+    return "コントローラーへ適用しました。";
   }
   return "保存が完了しました。";
 }
@@ -820,6 +834,7 @@ const settingsEditor: SettingsEditor = createSettingsEditor({
 });
 const profileLibrary: ProfileLibrary = createProfileLibrary({
   getEntries: () => profileList,
+  isBusy: () => busy,
   getDeviceSession: () => deviceSession,
   getActiveProfileState: () => activeProfileState,
   getActiveDeviceProfile: () => activeDeviceProfile,
@@ -845,20 +860,20 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("share-import-dialog-close").addEventListener("click", () => closeShareImportDialog(null));
   byId("share-import-dialog-cancel").addEventListener("click", () => closeShareImportDialog(null));
   byId("share-import-dialog-confirm").addEventListener("click", confirmShareImportDialog);
-  byId<HTMLInputElement>("share-import-code").addEventListener("input", () => {
-    const input = byId<HTMLInputElement>("share-import-code");
+  byId("share-import-code", HTMLInputElement).addEventListener("input", () => {
+    const input = byId("share-import-code", HTMLInputElement);
     const note = byId("share-import-dialog-note");
     input.removeAttribute("aria-invalid");
     note.textContent = "コードを入力して「追加」を押してください。";
     note.removeAttribute("data-kind");
   });
-  byId<HTMLInputElement>("share-import-code").addEventListener("keydown", (event) => {
+  byId("share-import-code", HTMLInputElement).addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       confirmShareImportDialog();
     }
   });
-  byId<HTMLDialogElement>("share-import-dialog").addEventListener("cancel", (event) => {
+  byId("share-import-dialog", HTMLDialogElement).addEventListener("cancel", (event) => {
     event.preventDefault();
     closeShareImportDialog(null);
   });
@@ -866,10 +881,13 @@ window.addEventListener("DOMContentLoaded", () => {
     showView("home");
     void refreshProfiles().catch((error: unknown) => showError(errorMessage(error)));
   });
+  byId("apply-profile").addEventListener("click", () => {
+    if (busy || !editingProfileCanApply()) return;
+    void saveProfileDocument("apply");
+  });
   byId("save-profile").addEventListener("click", () => void openSaveDialog());
   byId("save-dialog-cancel").addEventListener("click", closeSaveDialog);
-  byId("save-dialog-only").addEventListener("click", () => chooseSaveMode("save"));
-  byId("save-dialog-apply").addEventListener("click", () => chooseSaveMode("apply"));
+  byId("save-dialog-save").addEventListener("click", saveFromDialog);
   settingsEditor.setup();
   syncActions();
   void scan();

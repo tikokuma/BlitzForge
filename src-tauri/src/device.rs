@@ -4,6 +4,21 @@ use std::time::{Duration, Instant};
 
 use crate::protocol;
 
+pub const OFFICIAL_PROFILE_DEVICE_NAME: &str = "BLITZ2";
+pub const HID_DEVICE_PRODUCT_NAME: &str = "BIGBIG WON Blitz2";
+
+pub fn canonical_profile_device_name(name: &str) -> String {
+    if name.trim().eq_ignore_ascii_case(HID_DEVICE_PRODUCT_NAME)
+        || name
+            .trim()
+            .eq_ignore_ascii_case(OFFICIAL_PROFILE_DEVICE_NAME)
+    {
+        OFFICIAL_PROFILE_DEVICE_NAME.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 const PROFILE_READ_TIMEOUT_MS: i32 = 5_000;
 const PROFILE_SIZE_TIMEOUT_MS: i32 = 500;
 const SHORT_COMMAND_TIMEOUT_MS: i32 = 1_000;
@@ -18,6 +33,7 @@ pub struct DeviceSummary {
     pub vendor_product: String,
     pub usage: String,
     pub product: String,
+    pub profile_name: String,
     pub path: String,
 }
 
@@ -1501,7 +1517,12 @@ fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {
         vendor_product: format!("VID_{:04X} PID_{:04X}", info.vendor_id(), info.product_id()),
         usage: format!("0x{:04X}:0x{:04X}", info.usage_page(), info.usage()),
         product: if is_config_info(info) {
-            "BIGBIG WON Blitz2".to_string()
+            HID_DEVICE_PRODUCT_NAME.to_string()
+        } else {
+            info.product_string().unwrap_or("Controller").to_string()
+        },
+        profile_name: if is_config_info(info) {
+            OFFICIAL_PROFILE_DEVICE_NAME.to_string()
         } else {
             info.product_string().unwrap_or("Controller").to_string()
         },
@@ -1520,6 +1541,19 @@ fn spaced_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonicalizes_the_blitz2_profile_device_name() {
+        assert_eq!(
+            canonical_profile_device_name(HID_DEVICE_PRODUCT_NAME),
+            OFFICIAL_PROFILE_DEVICE_NAME
+        );
+        assert_eq!(
+            canonical_profile_device_name(" blitz2 "),
+            OFFICIAL_PROFILE_DEVICE_NAME
+        );
+        assert_eq!(canonical_profile_device_name("other"), "other");
+    }
 
     fn curve_input(stabilization: i16) -> CurveSettingsInput {
         CurveSettingsInput {

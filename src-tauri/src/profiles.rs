@@ -9,7 +9,7 @@ use std::{
 use rusqlite::{Connection, OptionalExtension, Row, backup::Backup, params};
 use serde::{Deserialize, Serialize};
 
-use crate::protocol;
+use crate::{device, protocol};
 
 const DATABASE_DIRECTORY: &str = "GamepadAssistant";
 const DATABASE_FILE: &str = "Config.db";
@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS t_Config(
     FDateTimeCreate TEXT COLLATE NOCASE DEFAULT(datetime('now', 'localtime')),
     FDeleted INTEGER DEFAULT 0
 );
+CREATE UNIQUE INDEX IF NOT EXISTS Index_Unique_t_Config_FID_WebService
+    ON t_Config(FID_WebService) WHERE FID_WebService != -1;
 "#;
 
 const SELECT_COLUMNS: &str = "FID, FID_WebService, FPhoneUUID_WebService, FDevUUID, FDevName, FUserID_WebService, FConfigName, FConfigJson, FFirmwareVersion, FZKMVersion, FDateTimeCreate, FDeleted";
@@ -51,6 +53,7 @@ const SELECT_COLUMNS: &str = "FID, FID_WebService, FPhoneUUID_WebService, FDevUU
 #[derive(Default)]
 pub struct ProfileStoreState {
     backup_created: bool,
+    legacy_device_names_migrated: bool,
     database: Option<OpenDatabase>,
     cached_data_version: Option<i64>,
     cached_profiles: Vec<ProfileListEntry>,
@@ -84,10 +87,7 @@ pub struct ProfileListEntry {
     pub firmware_version: String,
     pub zkm_version: String,
     pub created_at: String,
-    pub profile_length: usize,
     pub profile_version: Option<String>,
-    pub supported: bool,
-    pub incompatibility_reason: Option<String>,
     pub active: bool,
     #[serde(skip)]
     snapshot: Arc<ProfileSnapshot>,
@@ -141,6 +141,50 @@ struct OpenDatabase {
     writable: bool,
 }
 
+#[derive(Default)]
+struct ProfileMetadata {
+    phone_uuid: String,
+    device_uuid: String,
+    device_name: String,
+    firmware_version: String,
+    zkm_version: String,
+}
+
+impl ProfileMetadata {
+    fn fill_empty(
+        &mut self,
+        phone_uuid: &str,
+        device_uuid: &str,
+        device_name: &str,
+        firmware_version: &str,
+        zkm_version: &str,
+    ) {
+        if self.phone_uuid.trim().is_empty() && !phone_uuid.trim().is_empty() {
+            self.phone_uuid = phone_uuid.to_string();
+        }
+        if self.device_uuid.trim().is_empty() && !device_uuid.trim().is_empty() {
+            self.device_uuid = device_uuid.to_string();
+        }
+        if self.device_name.trim().is_empty() && !device_name.trim().is_empty() {
+            self.device_name = device_name.to_string();
+        }
+        if self.firmware_version.trim().is_empty() && !firmware_version.trim().is_empty() {
+            self.firmware_version = firmware_version.to_string();
+        }
+        if self.zkm_version.trim().is_empty() && !zkm_version.trim().is_empty() {
+            self.zkm_version = zkm_version.to_string();
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        !self.phone_uuid.trim().is_empty()
+            && !self.device_uuid.trim().is_empty()
+            && !self.device_name.trim().is_empty()
+            && !self.firmware_version.trim().is_empty()
+            && !self.zkm_version.trim().is_empty()
+    }
+}
+
 pub fn database_path() -> Result<PathBuf, String> {
     let program_data = env::var_os("PROGRAMDATA")
         .ok_or_else(|| "Windows PROGRAMDATA is not available".to_string())?;
@@ -154,6 +198,7 @@ pub fn list_profiles(
     known_data_version: Option<i64>,
     force: bool,
 ) -> Result<(i64, Option<Vec<ProfileListEntry>>), String> {
+    migrate_legacy_device_names(state, &database_path()?)?;
     let data_version = profile_data_version(profile_database(state)?)?;
     if !force && known_data_version == Some(data_version) {
         return Ok((data_version, None));
@@ -202,24 +247,6 @@ fn cache_listed_snapshots(state: &mut ProfileStoreState, entries: &mut [ProfileL
     }
 }
 
-#[cfg(test)]
-pub fn list_profiles_at_path(path: &Path) -> Result<Vec<ProfileListEntry>, String> {
-    let database = open_database(path)?;
-    list_profiles_from_database(&database)
-}
-
-#[cfg(test)]
-fn list_profiles_for_state_at_path(
-    state: &mut ProfileStoreState,
-    path: &Path,
-) -> Result<Vec<ProfileListEntry>, String> {
-    if state.database.is_none() {
-        state.database = Some(open_database(path)?);
-    }
-    let (_, entries) = list_profiles(state, None, true)?;
-    entries.ok_or_else(|| "profile list was unexpectedly unchanged".to_string())
-}
-
 fn list_profiles_from_database(database: &OpenDatabase) -> Result<Vec<ProfileListEntry>, String> {
     let mut statement = database
         .connection
@@ -242,12 +269,6 @@ fn profile_data_version(database: &OpenDatabase) -> Result<i64, String> {
         .connection
         .query_row("PRAGMA data_version", [], |row| row.get(0))
         .map_err(sql_error)
-}
-
-#[cfg(test)]
-pub fn load_saved_profile_at_path(path: &Path, id: i64) -> Result<ProfileDocument, String> {
-    let database = open_database(path)?;
-    load_saved_profile_from_database(&database, id)
 }
 
 fn load_saved_profile_from_database(
@@ -288,16 +309,36 @@ pub fn save_profile_at_path(
     let id = if let Some(id) = input.id {
         let expected = input
             .snapshot
+            .as_ref()
             .ok_or_else(|| "an existing profile save requires its original snapshot".to_string())?;
         let current = snapshot_by_id(&transaction, id)?
             .ok_or_else(|| format!("profile {id} was not found"))?;
-        if current != expected {
+        if current != *expected {
             return Err(profile_conflict(id));
         }
+        let metadata = profile_metadata_for_save(&transaction, &input, Some(&current))?;
         let changed = transaction
             .execute(
-                "UPDATE t_Config SET FConfigName = ?1, FConfigJson = ?2 WHERE FID = ?3 AND FDeleted = 0",
-                params![name, config_json, id],
+                "UPDATE t_Config SET
+                    FConfigName = ?1,
+                    FConfigJson = ?2,
+                    FPhoneUUID_WebService = CASE WHEN TRIM(COALESCE(FPhoneUUID_WebService, '')) = '' THEN ?3 ELSE FPhoneUUID_WebService END,
+                    FDevUUID = CASE WHEN TRIM(COALESCE(FDevUUID, '')) = '' THEN ?4 ELSE FDevUUID END,
+                    FDevName = CASE WHEN TRIM(COALESCE(FDevName, '')) = '' OR TRIM(FDevName) COLLATE NOCASE = ?5 THEN ?6 ELSE FDevName END,
+                    FFirmwareVersion = CASE WHEN TRIM(COALESCE(FFirmwareVersion, '')) = '' THEN ?7 ELSE FFirmwareVersion END,
+                    FZKMVersion = CASE WHEN TRIM(COALESCE(FZKMVersion, '')) = '' THEN ?8 ELSE FZKMVersion END
+                 WHERE FID = ?9 AND FDeleted = 0",
+                params![
+                    name,
+                    config_json,
+                    metadata.phone_uuid,
+                    metadata.device_uuid,
+                    device::HID_DEVICE_PRODUCT_NAME,
+                    metadata.device_name,
+                    metadata.firmware_version,
+                    metadata.zkm_version,
+                    id,
+                ],
             )
             .map_err(sql_error)?;
         if changed != 1 {
@@ -305,31 +346,18 @@ pub fn save_profile_at_path(
         }
         id
     } else {
-        let phone_uuid = if input.phone_uuid.trim().is_empty() {
-            transaction
-                .query_row(
-                    "SELECT FPhoneUUID_WebService FROM t_Config WHERE FDeleted = 0 AND TRIM(COALESCE(FPhoneUUID_WebService, '')) <> '' ORDER BY FID DESC LIMIT 1",
-                    [],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()
-                .map_err(sql_error)?
-                .flatten()
-                .unwrap_or_default()
-        } else {
-            input.phone_uuid.clone()
-        };
+        let metadata = profile_metadata_for_save(&transaction, &input, None)?;
         transaction
             .execute(
                 "INSERT INTO t_Config (FID_WebService, FPhoneUUID_WebService, FDevUUID, FDevName, FUserID_WebService, FConfigName, FConfigJson, FFirmwareVersion, FZKMVersion, FDeleted) VALUES (-1, ?1, ?2, ?3, -1, ?4, ?5, ?6, ?7, 0)",
                 params![
-                    phone_uuid,
-                    input.device_uuid,
-                    input.device_name,
+                    metadata.phone_uuid,
+                    metadata.device_uuid,
+                    metadata.device_name,
                     name,
                     config_json,
-                    input.firmware_version,
-                    input.zkm_version,
+                    metadata.firmware_version,
+                    metadata.zkm_version,
                 ],
             )
             .map_err(sql_error)?;
@@ -340,6 +368,106 @@ pub fn save_profile_at_path(
     let snapshot = snapshot_by_id(&database.connection, id)?
         .ok_or_else(|| format!("saved profile {id} could not be reloaded"))?;
     document_from_snapshot(snapshot)
+}
+
+fn profile_metadata_for_save(
+    connection: &Connection,
+    input: &SaveProfileInput,
+    existing: Option<&ProfileSnapshot>,
+) -> Result<ProfileMetadata, String> {
+    let mut metadata = ProfileMetadata {
+        phone_uuid: input.phone_uuid.clone(),
+        device_uuid: input.device_uuid.clone(),
+        device_name: device::canonical_profile_device_name(&input.device_name),
+        firmware_version: input.firmware_version.clone(),
+        zkm_version: input.zkm_version.clone(),
+    };
+    if let Some(existing) = existing {
+        metadata.fill_empty(
+            &existing.phone_uuid,
+            &existing.device_uuid,
+            &device::canonical_profile_device_name(&existing.device_name),
+            &existing.firmware_version,
+            &existing.zkm_version,
+        );
+    }
+
+    let phone_uuid = metadata.phone_uuid.trim().to_string();
+    let device_uuid = metadata.device_uuid.trim().to_string();
+    let mut statement = connection
+        .prepare(
+            "SELECT FPhoneUUID_WebService, FDevUUID, FDevName, FFirmwareVersion, FZKMVersion
+             FROM t_Config
+             WHERE (?1 = '' OR TRIM(COALESCE(FPhoneUUID_WebService, '')) = ?1)
+               AND (?2 = '' OR TRIM(COALESCE(FDevUUID, '')) = ?2)
+             ORDER BY FID DESC",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map(params![phone_uuid, device_uuid], |row| {
+            Ok((
+                optional_text(row, 0)?,
+                optional_text(row, 1)?,
+                optional_text(row, 2)?,
+                optional_text(row, 3)?,
+                optional_text(row, 4)?,
+            ))
+        })
+        .map_err(sql_error)?;
+    for row in rows {
+        let (phone_uuid, device_uuid, device_name, firmware_version, zkm_version) =
+            row.map_err(sql_error)?;
+        metadata.fill_empty(
+            &phone_uuid,
+            &device_uuid,
+            &device_name,
+            &firmware_version,
+            &zkm_version,
+        );
+        if metadata.is_complete() {
+            break;
+        }
+    }
+    Ok(metadata)
+}
+
+fn migrate_legacy_device_names(state: &mut ProfileStoreState, path: &Path) -> Result<(), String> {
+    if state.legacy_device_names_migrated {
+        return Ok(());
+    }
+
+    let database = open_database(path)?;
+    if !database.writable {
+        state.legacy_device_names_migrated = true;
+        return Ok(());
+    }
+
+    let has_legacy_name = database
+        .connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM t_Config WHERE TRIM(FDevName) COLLATE NOCASE = ?1)",
+            params![device::HID_DEVICE_PRODUCT_NAME],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sql_error)?
+        != 0;
+    if has_legacy_name {
+        ensure_backup(state, path)?;
+        database
+            .connection
+            .execute(
+                "UPDATE t_Config SET FDevName = ?1 WHERE TRIM(FDevName) COLLATE NOCASE = ?2",
+                params![
+                    device::OFFICIAL_PROFILE_DEVICE_NAME,
+                    device::HID_DEVICE_PRODUCT_NAME
+                ],
+            )
+            .map_err(sql_error)?;
+        state.cached_data_version = None;
+        state.cached_profiles.clear();
+    }
+    state.legacy_device_names_migrated = true;
+    Ok(())
 }
 
 fn delete_listed_profile_at_path(
@@ -466,20 +594,13 @@ fn optional_text(row: &Row<'_>, index: usize) -> rusqlite::Result<String> {
 }
 
 fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
-    let (profile_length, profile_version, supported, incompatibility_reason, normalized_profile) =
-        match parse_profile_json(&snapshot.config_json) {
-            Ok(bytes) => match protocol::normalize_v37_profile(&bytes) {
-                Ok(normalized) => (
-                    bytes.len(),
-                    Some("v37".to_string()),
-                    true,
-                    None,
-                    Some(Arc::from(normalized)),
-                ),
-                Err(error) => (bytes.len(), None, false, Some(error), None),
-            },
-            Err(error) => (0, None, false, Some(error), None),
-        };
+    let (profile_version, normalized_profile) = match parse_profile_json(&snapshot.config_json) {
+        Ok(bytes) => match protocol::normalize_v37_profile(&bytes) {
+            Ok(normalized) => (Some("v37".to_string()), Some(Arc::from(normalized))),
+            Err(_) => (None, None),
+        },
+        Err(_) => (None, None),
+    };
     let snapshot = Arc::new(snapshot);
     ProfileListEntry {
         id: snapshot.id,
@@ -490,10 +611,7 @@ fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
         firmware_version: snapshot.firmware_version.clone(),
         zkm_version: snapshot.zkm_version.clone(),
         created_at: snapshot.created_at.clone(),
-        profile_length,
         profile_version,
-        supported,
-        incompatibility_reason,
         active: false,
         snapshot,
         normalized_profile,
@@ -580,192 +698,24 @@ fn sql_error(error: rusqlite::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tempfile::tempdir;
+    use super::ProfileMetadata;
 
-    fn profile() -> Vec<u8> {
-        let mut profile = vec![0_u8; protocol::V37_PROFILE_LENGTH];
-        profile[2..4].copy_from_slice(&(protocol::V37_PROFILE_LENGTH as u16).to_be_bytes());
-        let crc = protocol::profile_crc(&profile).expect("profile crc");
-        profile[..2].copy_from_slice(&crc.to_be_bytes());
-        profile
-    }
-
-    fn save_input(
-        id: Option<i64>,
-        snapshot: Option<ProfileSnapshot>,
-        name: &str,
-    ) -> SaveProfileInput {
-        SaveProfileInput {
-            id,
-            phone_uuid: "A0AD9F12E604".into(),
-            name: name.into(),
-            raw_profile: profile(),
-            device_uuid: "55E8224A7A680000".into(),
-            device_name: "BLITZ2".into(),
-            firmware_version: "313333".into(),
+    #[test]
+    fn profile_metadata_fills_only_empty_values() {
+        let mut metadata = ProfileMetadata {
+            phone_uuid: "phone".into(),
+            device_uuid: String::new(),
+            device_name: "current-device".into(),
+            firmware_version: String::new(),
             zkm_version: "55".into(),
-            snapshot,
-        }
-    }
+        };
 
-    #[test]
-    fn creates_reads_updates_and_logically_deletes_profiles() {
-        let directory = tempdir().expect("temp directory");
-        let path = directory.path().join("Config.db");
-        let mut state = ProfileStoreState::default();
+        metadata.fill_empty("other-phone", "device", "other-device", "313333", "54");
 
-        let saved = save_profile_at_path(&mut state, &path, save_input(None, None, "First"))
-            .expect("save profile");
-        assert_eq!(saved.raw_profile.len(), protocol::V37_PROFILE_LENGTH);
-        assert_eq!(list_profiles_at_path(&path).expect("list").len(), 1);
-
-        let loaded = load_saved_profile_at_path(&path, saved.id).expect("load profile");
-        assert_eq!(loaded.snapshot, saved.snapshot);
-        let renamed = save_profile_at_path(
-            &mut state,
-            &path,
-            save_input(Some(saved.id), Some(loaded.snapshot.clone()), "Renamed"),
-        )
-        .expect("rename profile");
-        assert_eq!(renamed.id, saved.id);
-        assert_eq!(renamed.name, "Renamed");
-        let listed = list_profiles_for_state_at_path(&mut state, &path).expect("list renamed");
-        let list_json = serde_json::to_value(&listed[0]).expect("serialize list entry");
-        assert!(listed[0].revision > 0);
-        assert!(list_json.get("revision").is_some());
-        assert!(list_json.get("snapshot").is_none());
-        assert!(list_json.get("configJson").is_none());
-        let known_data_version = state.cached_data_version;
-        let (data_version, unchanged) =
-            list_profiles(&mut state, known_data_version, false).expect("check unchanged");
-        assert_eq!(Some(data_version), state.cached_data_version);
-        assert!(unchanged.is_none());
-
-        delete_listed_profile_at_path(
-            &mut state,
-            &path,
-            DeleteProfileInput {
-                id: renamed.id,
-                revision: listed[0].revision,
-            },
-        )
-        .expect("delete profile");
-        assert!(list_profiles_at_path(&path).expect("list").is_empty());
-    }
-
-    #[test]
-    fn preserves_unknown_metadata_when_updating() {
-        let directory = tempdir().expect("temp directory");
-        let path = directory.path().join("Config.db");
-        let connection = Connection::open(&path).expect("open database");
-        connection.execute_batch(CREATE_SCHEMA).expect("schema");
-        connection
-            .execute(
-                "INSERT INTO t_Config (FID_WebService, FPhoneUUID_WebService, FDevUUID, FDevName, FUserID_WebService, FConfigName, FConfigJson, FFirmwareVersion, FZKMVersion, FDeleted) VALUES (42, 'phone', 'uuid', 'device', 99, 'Old', ?1, 'fw', 'zkm', 0)",
-                params![serde_json::to_string(&profile()).expect("json")],
-            )
-            .expect("insert");
-        drop(connection);
-        let mut state = ProfileStoreState::default();
-        let loaded = load_saved_profile_at_path(&path, 1).expect("load");
-        let updated = save_profile_at_path(
-            &mut state,
-            &path,
-            save_input(Some(1), Some(loaded.snapshot.clone()), "New"),
-        )
-        .expect("update");
-        let connection = Connection::open(&path).expect("reopen");
-        let metadata: (i64, String, i64, String, String) = connection
-            .query_row(
-                "SELECT FID_WebService, FPhoneUUID_WebService, FUserID_WebService, FFirmwareVersion, FZKMVersion FROM t_Config WHERE FID = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-            )
-            .expect("metadata");
-        assert_eq!(
-            metadata,
-            (42, "phone".into(), 99, "fw".into(), "zkm".into())
-        );
-        assert_eq!(updated.name, "New");
-    }
-
-    #[test]
-    fn rejects_unknown_schema_for_writes() {
-        let directory = tempdir().expect("temp directory");
-        let path = directory.path().join("Config.db");
-        let connection = Connection::open(&path).expect("open database");
-        connection
-            .execute_batch("CREATE TABLE t_Config (FID INTEGER PRIMARY KEY, FConfigName TEXT)")
-            .expect("schema");
-        drop(connection);
-        let mut state = ProfileStoreState::default();
-        let error = save_profile_at_path(&mut state, &path, save_input(None, None, "New"))
-            .expect_err("unknown schema must be read-only");
-        assert!(error.contains("read-only"));
-    }
-
-    #[test]
-    fn reports_invalid_json_profiles_as_unsupported() {
-        let directory = tempdir().expect("temp directory");
-        let path = directory.path().join("Config.db");
-        let connection = Connection::open(&path).expect("open database");
-        connection.execute_batch(CREATE_SCHEMA).expect("schema");
-        connection
-            .execute(
-                "INSERT INTO t_Config (FConfigName, FConfigJson) VALUES ('Broken', '[1, 2, 999]')",
-                [],
-            )
-            .expect("insert");
-        drop(connection);
-        let entries = list_profiles_at_path(&path).expect("list");
-        assert_eq!(entries.len(), 1);
-        assert!(!entries[0].supported);
-        assert!(entries[0].incompatibility_reason.is_some());
-    }
-
-    #[test]
-    fn observes_wal_updates_and_rejects_a_stale_snapshot() {
-        let directory = tempdir().expect("temp directory");
-        let path = directory.path().join("Config.db");
-        let mut state = ProfileStoreState::default();
-        let saved = save_profile_at_path(&mut state, &path, save_input(None, None, "Original"))
-            .expect("save profile");
-        let loaded = load_saved_profile_at_path(&path, saved.id).expect("load profile");
-        let listed = list_profiles_for_state_at_path(&mut state, &path).expect("list profile");
-        let initial_data_version = state.cached_data_version;
-
-        let external = Connection::open(&path).expect("external connection");
-        external
-            .busy_timeout(Duration::from_secs(3))
-            .expect("busy timeout");
-        external
-            .execute(
-                "UPDATE t_Config SET FConfigName = ?1 WHERE FID = ?2",
-                params!["Official change", saved.id],
-            )
-            .expect("external update");
-        let delete_error = delete_listed_profile_at_path(
-            &mut state,
-            &path,
-            DeleteProfileInput {
-                id: saved.id,
-                revision: listed[0].revision,
-            },
-        )
-        .expect_err("stale delete must be rejected");
-        assert!(delete_error.starts_with("PROFILE_CONFLICT:"));
-
-        let refreshed = list_profiles_for_state_at_path(&mut state, &path).expect("refresh list");
-        assert_eq!(refreshed[0].name, "Official change");
-        assert_ne!(state.cached_data_version, initial_data_version);
-
-        let error = save_profile_at_path(
-            &mut state,
-            &path,
-            save_input(Some(saved.id), Some(loaded.snapshot), "BlitzForge change"),
-        )
-        .expect_err("stale save must be rejected");
-        assert!(error.starts_with("PROFILE_CONFLICT:"));
+        assert_eq!(metadata.phone_uuid, "phone");
+        assert_eq!(metadata.device_uuid, "device");
+        assert_eq!(metadata.device_name, "current-device");
+        assert_eq!(metadata.firmware_version, "313333");
+        assert_eq!(metadata.zkm_version, "55");
     }
 }

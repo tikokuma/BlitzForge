@@ -10,8 +10,8 @@ export function setupWindowControls(reportMessage: (message: string) => void): v
     return;
   }
 
-  const maximizeButton = byId<HTMLButtonElement>("window-maximize");
-  const maximizeIcon = byId<HTMLSpanElement>("window-maximize-icon");
+  const maximizeButton = byId("window-maximize", HTMLButtonElement);
+  const maximizeIcon = byId("window-maximize-icon", HTMLSpanElement);
   const reportWindowError = (error: unknown) => {
     reportMessage(`ウィンドウ操作に失敗しました: ${errorMessage(error)}`);
   };

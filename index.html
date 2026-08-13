@@ -64,6 +64,7 @@
           <button id="back-home" class="back-button">← 概要へ戻る</button>
           <strong id="settings-profile-name"></strong>
           <span id="settings-dirty" class="status-pill" hidden>未保存</span>
+          <button id="apply-profile" type="button" data-operation disabled>適用</button>
           <button id="save-profile" class="primary" data-operation disabled>保存</button>
         </div>
 
@@ -443,10 +444,8 @@
             <div id="save-diff-list" class="save-diff-list" role="list" aria-live="polite"></div>
             <p id="save-diff-empty" class="save-diff-empty" hidden>変更された項目はありません。</p>
           </section>
-          <p id="save-dialog-apply-note" class="save-dialog-note"></p>
           <div class="save-dialog-footer">
-            <button id="save-dialog-only" type="button">保存のみ</button>
-            <button id="save-dialog-apply" class="primary" type="button">保存して適用</button>
+            <button id="save-dialog-save" class="primary" type="button">保存</button>
           </div>
         </div>
       </dialog>

@@ -42,7 +42,7 @@ export function createDeviceSettingsEditor(options: DeviceSettingsEditorOptions)
   }
 
   function setPollingRateControl(value: number): void {
-    const select = byId<HTMLSelectElement>("polling-rate");
+    const select = byId("polling-rate", HTMLSelectElement);
     select.querySelector("option[data-generated]")?.remove();
     if (!POLLING_RATE_OPTIONS.some((option) => option.code === value)) {
       const option = document.createElement("option");
@@ -63,7 +63,7 @@ export function createDeviceSettingsEditor(options: DeviceSettingsEditorOptions)
   }
 
   function setStepAccuracyChoice(settings: StepAccuracySettings): void {
-    const select = byId<HTMLSelectElement>("step-accuracy");
+    const select = byId("step-accuracy", HTMLSelectElement);
     select.querySelector("option[data-generated]")?.remove();
     const choice = stepAccuracyChoice(settings);
     if (choice === null) {
@@ -77,20 +77,39 @@ export function createDeviceSettingsEditor(options: DeviceSettingsEditorOptions)
   }
 
   function setControls(settings: DeviceSettings): void {
+    setControlsEnabled(true);
     setPollingRateControl(settings.pollingRate);
-    byId<HTMLInputElement>("step-accuracy-mode").value = String(settings.stepAccuracy.mode);
-    byId<HTMLInputElement>("step-accuracy-value").value = String(settings.stepAccuracy.value);
-    byId<HTMLInputElement>("step-accuracy-extension").value = String(settings.stepAccuracy.extension);
+    byId("step-accuracy-mode", HTMLInputElement).value = String(settings.stepAccuracy.mode);
+    byId("step-accuracy-value", HTMLInputElement).value = String(settings.stepAccuracy.value);
+    byId("step-accuracy-extension", HTMLInputElement).value = String(settings.stepAccuracy.extension);
     setStepAccuracyChoice(settings.stepAccuracy);
+  }
+
+  function setControlsEnabled(enabled: boolean): void {
+    byId("polling-rate", HTMLSelectElement).disabled = !enabled;
+    byId("step-accuracy", HTMLSelectElement).disabled = !enabled;
+  }
+
+  function clearControls(): void {
+    const pollingRate = byId("polling-rate", HTMLSelectElement);
+    pollingRate.querySelector("option[data-generated]")?.remove();
+    pollingRate.selectedIndex = 0;
+    const stepAccuracy = byId("step-accuracy", HTMLSelectElement);
+    stepAccuracy.querySelector("option[data-generated]")?.remove();
+    stepAccuracy.selectedIndex = 0;
+    byId("step-accuracy-mode", HTMLInputElement).value = "0";
+    byId("step-accuracy-value", HTMLInputElement).value = "0";
+    byId("step-accuracy-extension", HTMLInputElement).value = "0";
+    setControlsEnabled(false);
   }
 
   function readSettings(): DeviceSettings {
     return {
-      pollingRate: Number(byId<HTMLSelectElement>("polling-rate").value),
+      pollingRate: Number(byId("polling-rate", HTMLSelectElement).value),
       stepAccuracy: {
-        mode: Number(byId<HTMLInputElement>("step-accuracy-mode").value),
-        value: Number(byId<HTMLInputElement>("step-accuracy-value").value),
-        extension: Number(byId<HTMLInputElement>("step-accuracy-extension").value),
+        mode: Number(byId("step-accuracy-mode", HTMLInputElement).value),
+        value: Number(byId("step-accuracy-value", HTMLInputElement).value),
+        extension: Number(byId("step-accuracy-extension", HTMLInputElement).value),
       },
     };
   }
@@ -111,29 +130,32 @@ export function createDeviceSettingsEditor(options: DeviceSettingsEditorOptions)
   function setup(): void {
     if (initialized) return;
     initialized = true;
-    byId<HTMLSelectElement>("polling-rate").addEventListener("change", markDirty);
-    byId<HTMLSelectElement>("step-accuracy").addEventListener("change", () => {
-      const choice = byId<HTMLSelectElement>("step-accuracy").value;
+    byId("polling-rate", HTMLSelectElement).addEventListener("change", markDirty);
+    byId("step-accuracy", HTMLSelectElement).addEventListener("change", () => {
+      const choice = byId("step-accuracy", HTMLSelectElement).value;
       if (choice !== "unknown") {
         const value = choice === "adaptive" ? null : Number(choice);
-        byId<HTMLInputElement>("step-accuracy-mode").value = choice === "adaptive" ? "0" : "1";
-        if (value !== null) byId<HTMLInputElement>("step-accuracy-value").value = String(value);
+        byId("step-accuracy-mode", HTMLInputElement).value = choice === "adaptive" ? "0" : "1";
+        if (value !== null) byId("step-accuracy-value", HTMLInputElement).value = String(value);
       }
       setStepAccuracyChoice(readSettings().stepAccuracy);
       markDirty();
     });
+    clearControls();
   }
 
   function setSettings(settings: DeviceSettings | null): void {
     baseline = settings ? cloneSettings(settings) : null;
     dirty = false;
     if (baseline) setControls(baseline);
+    else clearControls();
     byId("device-dirty").hidden = true;
   }
 
   function reset(): void {
     baseline = null;
     dirty = false;
+    clearControls();
     byId("device-dirty").hidden = true;
   }
 

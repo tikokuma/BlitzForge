@@ -371,13 +371,13 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions): InputD
       setText("diagnostics-polling-min", formatMs(pollingMeasurement.minInterval));
       setText("diagnostics-polling-max", formatMs(pollingMeasurement.maxInterval));
       setText("diagnostics-polling-jitter", formatMs(pollingMeasurement.intervalJitter));
-      drawPollingChart(byId<HTMLCanvasElement>("diagnostics-polling-chart"), pollingMeasurement.intervals);
+      drawPollingChart(byId("diagnostics-polling-chart", HTMLCanvasElement), pollingMeasurement.intervals);
     } else {
       for (const id of [
         "diagnostics-polling-rate", "diagnostics-polling-average", "diagnostics-polling-interval",
         "diagnostics-polling-min", "diagnostics-polling-max", "diagnostics-polling-jitter",
       ]) setText(id, "—");
-      drawPollingChart(byId<HTMLCanvasElement>("diagnostics-polling-chart"), []);
+      drawPollingChart(byId("diagnostics-polling-chart", HTMLCanvasElement), []);
     }
   }
 
@@ -422,11 +422,11 @@ export function createInputDiagnostics(options: InputDiagnosticsOptions): InputD
       || !pointsEqual(previous.raw.rightStick, sample.raw.rightStick)
       || !pointsEqual(previous.simulation.rightStick, sample.simulation.rightStick);
     if (leftChanged) {
-      drawStickPosition(byId<HTMLCanvasElement>("diagnostics-left-stick-canvas"), rawLeft, simulationLeft);
+      drawStickPosition(byId("diagnostics-left-stick-canvas", HTMLCanvasElement), rawLeft, simulationLeft);
       renderStickReadout("left-stick", rawLeft);
     }
     if (rightChanged) {
-      drawStickPosition(byId<HTMLCanvasElement>("diagnostics-right-stick-canvas"), rawRight, simulationRight);
+      drawStickPosition(byId("diagnostics-right-stick-canvas", HTMLCanvasElement), rawRight, simulationRight);
       renderStickReadout("right-stick", rawRight);
     }
     const buttonMaskChanged = previous === undefined

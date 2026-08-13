@@ -5,6 +5,7 @@ type ProfileAction = "open" | "apply" | "share" | "duplicate" | "rename" | "dele
 
 type ProfileLibraryOptions = {
   getEntries: () => readonly ProfileListEntry[];
+  isBusy: () => boolean;
   getDeviceSession: () => DeviceSession | null;
   getActiveProfileState: () => ActiveProfileState;
   getActiveDeviceProfile: () => readonly number[] | null;
@@ -20,6 +21,7 @@ type ProfileLibraryOptions = {
 export type ProfileLibrary = {
   render: () => void;
   handleClick: (event: Event) => void;
+  syncActions: () => void;
 };
 
 function createActionButton(
@@ -33,6 +35,7 @@ function createActionButton(
   button.type = "button";
   button.dataset.profileAction = action;
   button.dataset.profileId = String(entryId);
+  button.dataset.profileDisabled = String(disabled);
   button.textContent = label;
   button.disabled = disabled;
   button.className = className;
@@ -40,6 +43,13 @@ function createActionButton(
 }
 
 export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLibrary {
+  function syncActions(): void {
+    const container = byId("profile-library");
+    for (const button of container.querySelectorAll<HTMLButtonElement>("button[data-profile-action]")) {
+      button.disabled = options.isBusy() || button.dataset.profileDisabled === "true";
+    }
+  }
+
   function isActive(entry: ProfileListEntry): boolean {
     const state = options.getActiveProfileState();
     return (state === "known" || state === "remembered") && entry.active;
@@ -75,6 +85,7 @@ export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLib
       empty.className = "empty-hint";
       empty.textContent = "共有プロフィールはまだありません。Shareコードから追加するか、コントローラーから読み込んでください。";
       container.append(empty);
+      syncActions();
       return;
     }
 
@@ -110,13 +121,6 @@ export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLib
         state.textContent = options.getActiveProfileState() === "remembered" ? "前回適用" : "使用中";
         states.append(state);
       }
-      if (!matchesDevice) {
-        const state = document.createElement("span");
-        state.className = `status-pill ${entry.supported ? "profile-compatible" : "profile-incompatible"}`;
-        state.textContent = entry.supported ? "互換" : "非対応";
-        states.append(state);
-      }
-
       const details = document.createElement("p");
       details.className = "profile-card-details";
       details.textContent = [
@@ -127,16 +131,16 @@ export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLib
 
       const actions = document.createElement("div");
       actions.className = "button-row profile-card-actions";
-      const open = createActionButton(entry.id, "open", "開く", !entry.supported);
+      const open = createActionButton(entry.id, "open", "開く");
       const apply = createActionButton(
         entry.id,
         "apply",
         "適用",
-        !entry.supported || !options.getDeviceSession() || !matchesDevice,
+        !options.getDeviceSession() || !matchesDevice,
         "primary",
       );
-      const share = createActionButton(entry.id, "share", "Shareコードを発行", !entry.supported);
-      const duplicate = createActionButton(entry.id, "duplicate", "複製", !entry.supported);
+      const share = createActionButton(entry.id, "share", "Shareコードを発行");
+      const duplicate = createActionButton(entry.id, "duplicate", "複製");
       const rename = createActionButton(entry.id, "rename", "名前変更");
       const remove = createActionButton(entry.id, "delete", "削除", false, "danger-button");
       actions.append(open, apply, share, duplicate, rename, remove);
@@ -144,9 +148,11 @@ export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLib
       cards.append(card);
     }
     container.append(cards);
+    syncActions();
   }
 
   function handleClick(event: Event): void {
+    if (options.isBusy()) return;
     if (!(event.target instanceof Element)) return;
     const button = event.target.closest<HTMLButtonElement>("button[data-profile-action][data-profile-id]");
     if (!button || button.disabled) return;
@@ -175,5 +181,5 @@ export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLib
     }
   }
 
-  return { render, handleClick };
+  return { render, handleClick, syncActions };
 }

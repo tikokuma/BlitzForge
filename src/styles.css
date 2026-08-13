@@ -236,9 +236,7 @@ p { color: #8e9aaa; font-size: 13px; line-height: 1.5; }
 .profile-card-details { color: #8996a7; font-size: 12px; overflow-wrap: anywhere; }
 .profile-card-actions { justify-content: flex-start; }
 .profile-current-status { margin-top: 8px; color: #9cbaf0; font-size: 12px; }
-.profile-compatible { color: #64d6a2; background: #17362c; }
 .profile-active { color: #64d6a2; background: #17362c; }
-.profile-incompatible { color: #ffb5b5; background: #3b2024; }
 
 .details {
   display: grid;
@@ -625,8 +623,7 @@ pre {
 .save-diff-after strong { color: #a9cdff; }
 .save-diff-arrow { color: #6f9ee9; font-size: 17px; line-height: 1; }
 .save-diff-empty { margin: 12px 0 0; padding: 16px; border: 1px dashed #344151; border-radius: 8px; color: #9eabbc; background: #141a22; font-size: 13px; text-align: center; }
-.save-dialog-note { min-height: 18px; margin: 0; color: #9eabbc; font-size: 12px; line-height: 1.5; }
-.save-dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.save-dialog-footer { display: flex; justify-content: flex-end; }
 .save-dialog-footer button { min-width: 112px; }
 .share-import-dialog {
   width: min(520px, calc(100% - 40px));

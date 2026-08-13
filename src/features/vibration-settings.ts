@@ -40,23 +40,23 @@ export function createVibrationEditor(options: VibrationEditorOptions): Vibratio
   let dirty = false;
 
   function readRangeValue(id: string): number {
-    return Number(byId<HTMLInputElement>(id).value);
+    return Number(byId(id, HTMLInputElement).value);
   }
 
   function setRangeControl(id: string, value: number): void {
-    byId<HTMLInputElement>(id).value = String(value);
+    byId(id, HTMLInputElement).value = String(value);
     updateRangeOutput(id);
   }
 
   function clampRangeValue(id: string, value: number): number {
-    const input = byId<HTMLInputElement>(id);
+    const input = byId(id, HTMLInputElement);
     const min = Number(input.min);
     const max = Number(input.max);
     return Math.min(max, Math.max(min, Math.round(value)));
   }
 
   function updateRangeOutput(id: string): void {
-    const value = byId<HTMLInputElement>(id).value;
+    const value = byId(id, HTMLInputElement).value;
     const target = byId(`${id}-value`);
     if (target instanceof HTMLInputElement) target.value = value;
     else target.textContent = value;
@@ -106,7 +106,7 @@ export function createVibrationEditor(options: VibrationEditorOptions): Vibratio
   }
 
   function updateEditorState(): void {
-    const mode = byId<HTMLSelectElement>("vibration-mode").value as VibrationMode;
+    const mode = byId("vibration-mode", HTMLSelectElement).value as VibrationMode;
     const custom = mode === "custom";
     for (const id of [
       "vibration-left-min",
@@ -114,7 +114,7 @@ export function createVibrationEditor(options: VibrationEditorOptions): Vibratio
       "vibration-right-min",
       "vibration-right-max",
     ] as const) {
-      byId<HTMLInputElement>(id).disabled = !custom;
+      byId(id, HTMLInputElement).disabled = !custom;
     }
   }
 
@@ -128,7 +128,7 @@ export function createVibrationEditor(options: VibrationEditorOptions): Vibratio
     setRangeControl("vibration-left-max", values.left.max);
     setRangeControl("vibration-right-min", values.right.min);
     setRangeControl("vibration-right-max", values.right.max);
-    byId<HTMLSelectElement>("vibration-mode").value = mode;
+    byId("vibration-mode", HTMLSelectElement).value = mode;
     updateEditorState();
   }
 
@@ -158,8 +158,8 @@ export function createVibrationEditor(options: VibrationEditorOptions): Vibratio
   function setup(): void {
     if (initialized) return;
     initialized = true;
-    byId<HTMLSelectElement>("vibration-mode").addEventListener("change", () => {
-      applyMode(byId<HTMLSelectElement>("vibration-mode").value as VibrationMode);
+    byId("vibration-mode", HTMLSelectElement).addEventListener("change", () => {
+      applyMode(byId("vibration-mode", HTMLSelectElement).value as VibrationMode);
       markDirty();
     });
     for (const id of [
@@ -168,11 +168,11 @@ export function createVibrationEditor(options: VibrationEditorOptions): Vibratio
       "vibration-right-min",
       "vibration-right-max",
     ] as const) {
-      byId<HTMLInputElement>(id).addEventListener("input", () => {
+      byId(id, HTMLInputElement).addEventListener("input", () => {
         const grip = id.includes("left") ? "left" : "right";
         const changed = id.endsWith("-min") ? "min" : "max";
         enforceVibrationWidth(grip, changed);
-        byId<HTMLSelectElement>("vibration-mode").value = vibrationMode(readSettings());
+        byId("vibration-mode", HTMLSelectElement).value = vibrationMode(readSettings());
         updateEditorState();
         markDirty();
       });
