@@ -4,14 +4,10 @@ import {
   type DiagnosticSample,
   type StickPoint,
 } from "../domain/input-diagnostics";
-import type { CurveSettings, PollingMeasurement } from "../models";
+import type { DiagnosticStickSettings } from "./curve-editor";
+import type { PollingMeasurement } from "../models";
 
 type DiagnosticTab = "viewer" | "polling";
-
-type DiagnosticStickSettings = {
-  leftStick: { curve: CurveSettings; circularAlgorithm: boolean };
-  rightStick: { curve: CurveSettings; circularAlgorithm: boolean };
-};
 
 type InputDiagnosticsOptions = {
   getDeviceIdentifiers: () => readonly string[];

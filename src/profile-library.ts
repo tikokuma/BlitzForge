@@ -9,7 +9,7 @@ type ProfileLibraryOptions = {
   getDeviceSession: () => DeviceSession | null;
   getActiveProfileState: () => ActiveProfileState;
   getActiveDeviceProfile: () => readonly number[] | null;
-  profileMatchesDevice: (entry: ProfileListEntry) => boolean;
+  profileTargetsDevice: (entry: ProfileListEntry) => boolean;
   onOpen: (id: number) => void;
   onApply: (id: number) => void;
   onShare: (id: number, button: HTMLButtonElement) => void;
@@ -92,7 +92,7 @@ export function createProfileLibrary(options: ProfileLibraryOptions): ProfileLib
     const sorted = entries
       .map((entry) => ({
         entry,
-        matchesDevice: options.profileMatchesDevice(entry),
+        matchesDevice: options.profileTargetsDevice(entry),
         active: isActive(entry),
       }))
       .sort((left, right) => {

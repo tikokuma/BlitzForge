@@ -455,6 +455,22 @@ pre {
   background: #141a22;
 }
 
+.preview-column { display: grid; align-self: start; gap: 18px; min-width: 0; }
+.stick-output-title { margin: 0 0 8px; color: #e8edf5; font-size: 15px; text-align: center; }
+.stick-output-preview { display: block; width: min(100%, 260px); height: auto; margin: 0 auto; }
+.stick-output-disc { fill: #202a36; stroke: #536171; stroke-width: 1.2; }
+.stick-output-zone { fill: none; pointer-events: none; }
+.stick-output-center-zone.compensation { fill: #ff651f; }
+.stick-output-center-zone.deadzone { fill: #6f7c8d; stroke: #6f7c8d; }
+.stick-output-edge-zone.compensation { stroke: #ff651f; }
+.stick-output-edge-zone.deadzone { stroke: #6f7c8d; }
+.stick-output-origin { fill: #111821; }
+.stick-output-legend { display: flex; justify-content: center; gap: 14px; margin-top: 2px; color: #8e9aaa; font-size: 11px; }
+.stick-output-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.stick-output-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.stick-output-swatch.compensation { background: #ff651f; }
+.stick-output-swatch.deadzone { border: 2px solid #6f7c8d; }
+
 .preview-heading { align-items: flex-start; margin-bottom: 14px; }
 .preview-heading p { margin-top: 4px; font-size: 12px; }
 .curve-preview { display: block; width: min(100%, 360px); height: auto; margin: 4px auto 0; overflow: visible; touch-action: none; }
@@ -794,7 +810,7 @@ pre {
 @media (max-width: 820px) {
   .app-shell { width: min(100% - 32px, 680px); }
   .settings-grid { grid-template-columns: 1fr; }
-  .preview-card { max-width: 520px; }
+  .preview-column { max-width: 520px; }
   .keymap-grid,
   .device-settings-grid { grid-template-columns: 1fr; }
   .keymap-row { grid-template-columns: minmax(130px, .7fr) minmax(170px, 1fr) 58px; }

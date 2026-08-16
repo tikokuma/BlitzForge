@@ -20,3 +20,7 @@ export function deviceUuidsEqual(left: string, right: string): boolean {
   const normalizedLeft = normalizeDeviceUuid(left);
   return normalizedLeft !== null && normalizedLeft === normalizeDeviceUuid(right);
 }
+
+export function profileTargetsDevice(profileUuid: string, deviceUuid: string): boolean {
+  return profileUuid.trim().length === 0 || deviceUuidsEqual(profileUuid, deviceUuid);
+}

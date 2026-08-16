@@ -3,12 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { byId, errorMessage } from "./dom";
 
 export function setupWindowControls(reportMessage: (message: string) => void): void {
-  let appWindow: ReturnType<typeof getCurrentWindow>;
-  try {
-    appWindow = getCurrentWindow();
-  } catch {
-    return;
-  }
+  const appWindow = getCurrentWindow();
 
   const maximizeButton = byId("window-maximize", HTMLButtonElement);
   const maximizeIcon = byId("window-maximize-icon", HTMLSpanElement);

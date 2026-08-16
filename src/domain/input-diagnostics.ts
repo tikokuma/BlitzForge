@@ -31,7 +31,7 @@ function interpolate(fromX: number, fromY: number, toX: number, toY: number, x: 
  * This is a UI simulation, not the processed output reported by controller
  * firmware.
  */
-export function evaluateStickCurve(radius: number, curve: CurveSettings): number {
+function evaluateStickCurve(radius: number, curve: CurveSettings): number {
   const centerCompensation = Math.max(0, -curve.center);
   const edgeCompensation = Math.max(0, -curve.edge);
   const input = clamp(radius * 100, 0, 103);

@@ -1,17 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
-  ApplyProfileResult,
   CommitProfileInput,
-  CommitPreview,
   CommitResult,
   DeviceSession,
   DeviceSettings,
-  MacroSummary,
+  MacroSlotSummary,
   ProfileDocument,
   ProfileListEntry,
+  ProfileSummary,
   PollingMeasurement,
   SaveProfileInput,
+  SettingChange,
 } from "./models";
 
 type ShareProfileInput = {
@@ -43,7 +43,7 @@ export const backend = {
   loadSavedProfile: (id: number): Promise<ProfileDocument> => invoke("load_saved_profile", { id }),
   saveProfile: (input: SaveProfileInput): Promise<ProfileDocument> => invoke("save_profile", { input }),
   commitProfile: (input: CommitProfileInput): Promise<CommitResult> => invoke("commit_profile", { input }),
-  previewProfileCommit: (input: CommitProfileInput): Promise<CommitPreview> =>
+  previewProfileCommit: (input: CommitProfileInput): Promise<SettingChange[]> =>
     invoke("preview_profile_commit", { input }),
   deleteProfile: (id: number, revision: number): Promise<void> =>
     invoke("delete_profile", { input: { id, revision } }),
@@ -52,11 +52,11 @@ export const backend = {
     invoke("import_share_profile", { shareCode, deviceUuid }),
   createShareCode: (input: ShareProfileInput): Promise<string> => invoke("create_share_code", input),
   newProfile: (): Promise<ProfileDocument> => invoke("new_profile"),
-  applyProfile: (profile: number[], devicePath: string): Promise<ApplyProfileResult> =>
+  applyProfile: (profile: number[], devicePath: string): Promise<ProfileSummary> =>
     invoke("apply_profile", { profile, devicePath }),
   readDeviceSettings: (devicePath: string): Promise<DeviceSettings> =>
     invoke("read_device_settings", { devicePath }),
   measurePollingRate: (devicePath: string, durationMs = 250): Promise<PollingMeasurement> =>
     invoke("measure_polling_rate", { devicePath, durationMs }),
-  readMacros: (devicePath: string): Promise<MacroSummary> => invoke("read_macros", { devicePath }),
+  readMacros: (devicePath: string): Promise<MacroSlotSummary[]> => invoke("read_macros", { devicePath }),
 };

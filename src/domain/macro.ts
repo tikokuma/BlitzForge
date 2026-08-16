@@ -37,31 +37,26 @@ type MacroStepBytes = [
   number, number, number, number, number,
 ];
 
+function isByteRecord(record: readonly number[]): record is MacroRecord {
+  return record.length >= MACRO_HEADER_LENGTH
+    && (record.length - MACRO_HEADER_LENGTH) % MACRO_STEP_LENGTH === 0
+    && record.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 0xff);
+}
+
 function assertByteRecord(record: readonly number[]): asserts record is MacroRecord {
-  if (record.length < MACRO_HEADER_LENGTH || (record.length - MACRO_HEADER_LENGTH) % MACRO_STEP_LENGTH !== 0) {
-    throw new RangeError("A macro record must contain a 10-byte header and complete 10-byte steps");
-  }
-  if (record.some((byte) => !Number.isInteger(byte) || byte < 0 || byte > 0xff)) {
-    throw new RangeError("A macro record may only contain bytes");
+  if (!isByteRecord(record)) {
+    throw new RangeError("A macro record must contain a 10-byte header and complete 10-byte steps and may only contain bytes");
   }
 }
 
 function macroStepBytes(record: readonly number[], index: number): MacroStepBytes {
   const offset = MACRO_HEADER_LENGTH + index * MACRO_STEP_LENGTH;
-  const bytes = record.slice(offset, offset + MACRO_STEP_LENGTH);
-  if (bytes.length !== MACRO_STEP_LENGTH) {
-    throw new RangeError(`Macro step index ${index} is out of range`);
-  }
-  return bytes as MacroStepBytes;
+  return record.slice(offset, offset + MACRO_STEP_LENGTH) as MacroStepBytes;
 }
 
 export function isMacroRecord(record: readonly number[]): boolean {
-  try {
-    assertByteRecord(record);
-    return (record.length - MACRO_HEADER_LENGTH) / MACRO_STEP_LENGTH <= MACRO_MAX_STEPS;
-  } catch {
-    return false;
-  }
+  return isByteRecord(record)
+    && (record.length - MACRO_HEADER_LENGTH) / MACRO_STEP_LENGTH <= MACRO_MAX_STEPS;
 }
 
 function assertStepIndex(record: readonly number[], index: number): void {

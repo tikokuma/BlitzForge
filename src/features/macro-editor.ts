@@ -20,8 +20,6 @@ import type {
   MacroCommitInput,
   MacroSlotSummary,
   MacroStep,
-  MacroSummary,
-  MacroWriteResult,
 } from "../models";
 
 type MacroEditorHost = {
@@ -37,12 +35,12 @@ export type MacroEditor = {
   syncActions: () => void;
   isDirty: () => boolean;
   readDraft: () => MacroCommitInput | null;
-  markSaved: (result: MacroWriteResult) => void;
+  markSaved: (result: MacroSlotSummary) => void;
   reset: () => void;
 };
 
 export function createMacroEditor(host: MacroEditorHost): MacroEditor {
-  let summary: MacroSummary | null = null;
+  let summary: MacroSlotSummary[] | null = null;
   let draftRecord: number[] | null = null;
   let originalRecord: number[] | null = null;
   let selectedSlot = 0;
@@ -308,7 +306,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
   }
 
   function selectSlot(slot: number, confirmDiscard = true): void {
-    const selected = summary?.slots.find((entry) => entry.slot === slot);
+    const selected = summary?.find((entry) => entry.slot === slot);
     if (!selected) return;
     if (slot !== selectedSlot && confirmDiscard && !confirmDiscardChanges(
       "スロットを切り替えると、編集中のマクロ変更が失われます。",
@@ -347,11 +345,11 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     };
   }
 
-  function renderSummary(nextSummary: MacroSummary, confirmDiscard = true): void {
+  function renderSummary(nextSummary: MacroSlotSummary[], confirmDiscard = true): void {
     summary = nextSummary;
     const currentSlot = Number(byId("macro-slot", HTMLSelectElement).value);
     byId("macro-slots").replaceChildren(
-      ...nextSummary.slots.map((slot) => {
+      ...nextSummary.map((slot) => {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "macro-slot-card";
@@ -361,7 +359,7 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
         return button;
       }),
     );
-    selectSlot(nextSummary.slots.some((slot) => slot.slot === currentSlot) ? currentSlot : 0, confirmDiscard);
+    selectSlot(nextSummary.some((slot) => slot.slot === currentSlot) ? currentSlot : 0, confirmDiscard);
     byId("macro-output").textContent = "読み込み完了。編集するスロットを選択してください。";
   }
 
@@ -381,23 +379,20 @@ export function createMacroEditor(host: MacroEditorHost): MacroEditor {
     }
   }
 
-  function markSaved(result: MacroWriteResult): void {
-    const savedRecord = result.slot.rawRecord.slice();
+  function markSaved(result: MacroSlotSummary): void {
+    const savedRecord = result.rawRecord.slice();
     originalRecord = savedRecord.slice();
     draftRecord = savedRecord.slice();
     dirty = false;
     if (summary) {
-      summary = {
-        ...summary,
-        slots: summary.slots.map((item) => item.slot === selectedSlot ? result.slot : item),
-      };
+      summary = summary.map((item) => item.slot === selectedSlot ? result : item);
       renderSummary(summary);
     } else {
       renderHeader(savedRecord);
       renderSteps(savedRecord);
     }
-    byId("macro-slot-details").textContent = `${slotDescription(result.slot)}。保存しました。`;
-    byId("macro-output").textContent = `${slotDescription(result.slot)}を保存しました。`;
+    byId("macro-slot-details").textContent = `${slotDescription(result)}。保存しました。`;
+    byId("macro-output").textContent = `${slotDescription(result)}を保存しました。`;
     host.syncHostActions();
   }
 

@@ -31,7 +31,6 @@ const POLLING_MEASUREMENT_MAX_MS: u64 = 1_000;
 #[serde(rename_all = "camelCase")]
 pub struct DeviceSummary {
     pub vendor_product: String,
-    pub usage: String,
     pub product: String,
     pub profile_name: String,
     pub path: String,
@@ -48,9 +47,6 @@ pub struct DeviceSession {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileSummary {
-    pub device: Option<DeviceSummary>,
-    pub stored_crc: String,
-    pub computed_crc: String,
     pub vibration: VibrationSettingsSummary,
     pub settings: ControllerSettingsSummary,
     pub raw_profile: Vec<u8>,
@@ -62,14 +58,6 @@ pub struct SettingChange {
     pub label: String,
     pub before: String,
     pub after: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApplyProfileResult {
-    pub profile: ProfileSummary,
-    pub ack: String,
-    pub ack_value: u8,
 }
 
 #[derive(Clone, Serialize)]
@@ -98,8 +86,6 @@ pub struct ControllerSettingsSummary {
     left_stick: CurveSettingsSummary,
     right_stick: CurveSettingsSummary,
     rapid_fire: RapidFireSummary,
-    rapid_fire_speed_index: Option<u8>,
-    rapid_fire_timing: Option<RapidFireTimingSummary>,
     key_bindings: Vec<String>,
 }
 
@@ -118,14 +104,7 @@ pub struct ControllerSettingsInput {
 #[serde(rename_all = "camelCase")]
 pub struct RapidFireSummary {
     keys: Vec<Option<bool>>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RapidFireTimingSummary {
-    period_ms: u16,
-    half_period_ms: u16,
-    hz: u8,
+    speed_index: Option<u8>,
 }
 
 #[derive(Default, Deserialize)]
@@ -208,15 +187,6 @@ pub struct StepAccuracyInput {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeviceSettingsWriteResult {
-    device: DeviceSummary,
-    settings: DeviceSettingsSummary,
-    polling_command: String,
-    step_accuracy_command: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PollingMeasurement {
     pub polling_rate: f64,
     pub average_polling_rate: f64,
@@ -231,33 +201,10 @@ pub struct PollingMeasurement {
 #[serde(rename_all = "camelCase")]
 pub struct MacroSlotSummary {
     slot: u8,
-    crc: String,
-    active_length: usize,
     step_count: usize,
-    setting: u8,
-    m_key: u8,
     run_key: u8,
-    flags: u8,
-    repeat: u16,
     raw_record: Vec<u8>,
     error: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MacroSummary {
-    device: DeviceSummary,
-    list_response: String,
-    slots: Vec<MacroSlotSummary>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MacroWriteResult {
-    device: DeviceSummary,
-    slot: MacroSlotSummary,
-    ack: String,
-    ack_value: u8,
 }
 
 pub fn scan_device() -> Result<Option<DeviceSession>, String> {
@@ -283,37 +230,24 @@ pub fn scan_device() -> Result<Option<DeviceSession>, String> {
 }
 
 pub fn read_profile_summary(expected_device_path: &str) -> Result<ProfileSummary, String> {
-    let (device, profile) = read_profile(expected_device_path)?;
-    build_profile_summary(profile, Some(device))
+    build_profile_summary(read_profile(expected_device_path)?)
 }
 
 pub fn load_profile_summary(input: Vec<u8>) -> Result<ProfileSummary, String> {
     let profile = protocol::normalize_v37_profile(&input)?;
-    build_profile_summary(profile, None)
+    build_profile_summary(profile)
 }
 
-pub fn apply_profile(input: Vec<u8>, device_path: &str) -> Result<ApplyProfileResult, String> {
+pub fn apply_profile(input: Vec<u8>, device_path: &str) -> Result<ProfileSummary, String> {
     let profile = protocol::normalize_v37_profile(&input)?;
-    let (device, ack, ack_value) = write_profile(&profile, device_path)?;
-    Ok(ApplyProfileResult {
-        profile: build_profile_summary(profile, Some(device))?,
-        ack: spaced_hex(&ack),
-        ack_value,
-    })
+    write_profile(&profile, device_path)?;
+    build_profile_summary(profile)
 }
 
-pub fn build_profile_summary(
-    profile: Vec<u8>,
-    device: Option<DeviceSummary>,
-) -> Result<ProfileSummary, String> {
-    let stored_crc = protocol::stored_profile_crc(&profile)?;
-    let computed_crc = protocol::profile_crc(&profile)?;
+pub fn build_profile_summary(profile: Vec<u8>) -> Result<ProfileSummary, String> {
     let vibration = protocol::vibration_settings(&profile)?;
     let settings = settings_summary(&profile)?;
     Ok(ProfileSummary {
-        device,
-        stored_crc: format!("{stored_crc:04X}"),
-        computed_crc: format!("{computed_crc:04X}"),
         vibration: vibration_summary(vibration),
         settings,
         raw_profile: profile,
@@ -327,7 +261,7 @@ pub fn update_vibration(
     let mut profile = protocol::normalize_v37_profile(&profile)?;
     let settings = input.into_settings()?;
     protocol::set_vibration_settings(&mut profile, settings)?;
-    build_profile_summary(profile, None)
+    build_profile_summary(profile)
 }
 
 pub fn update_controller_settings(
@@ -367,7 +301,7 @@ pub fn update_controller_settings(
     )?;
     let crc = protocol::profile_crc(&profile)?;
     profile[..2].copy_from_slice(&crc.to_be_bytes());
-    build_profile_summary(profile, None)
+    build_profile_summary(profile)
 }
 
 pub fn profile_changes(before: &[u8], after: &[u8]) -> Result<Vec<SettingChange>, String> {
@@ -866,13 +800,8 @@ pub fn read_device_settings(expected_device_path: &str) -> Result<DeviceSettings
 pub fn set_device_settings(
     expected_device_path: &str,
     input: DeviceSettingsInput,
-) -> Result<DeviceSettingsWriteResult, String> {
+) -> Result<DeviceSettingsSummary, String> {
     validate_device_settings(&input)?;
-    let device_summary = {
-        let api = HidApi::new().map_err(|error| error.to_string())?;
-        let info = find_config_info_at_path(&api, expected_device_path)?;
-        summary(info)
-    };
     let step_accuracy = protocol::StepAccuracySettings {
         mode: input.step_accuracy.mode,
         value: input.step_accuracy.value,
@@ -904,12 +833,7 @@ pub fn set_device_settings(
         );
     }
 
-    Ok(DeviceSettingsWriteResult {
-        device: device_summary,
-        settings: readback,
-        polling_command: spaced_hex(protocol::wire_bytes(&polling_report)),
-        step_accuracy_command: spaced_hex(protocol::wire_bytes(&step_accuracy_report)),
-    })
+    Ok(readback)
 }
 
 pub fn measure_polling_rate(
@@ -975,10 +899,9 @@ pub fn measure_polling_rate(
     })
 }
 
-pub fn read_macros(expected_device_path: &str) -> Result<MacroSummary, String> {
+pub fn read_macros(expected_device_path: &str) -> Result<Vec<MacroSlotSummary>, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device_summary = summary(info);
     let device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -987,13 +910,12 @@ pub fn read_macros(expected_device_path: &str) -> Result<MacroSummary, String> {
     let mut slots = Vec::with_capacity(protocol::MACRO_SLOT_COUNT);
     for (slot, entry) in entries.into_iter().enumerate() {
         let slot_u8 = slot as u8;
-        let base = macro_slot_summary(slot_u8, entry.crc, entry.active_length, Vec::new(), None);
+        let base = macro_slot_summary(slot_u8, entry.active_length, Vec::new(), None);
         match protocol::get_macro_info_report(slot_u8)
             .and_then(|request| transact_macro_info(&device, &request))
         {
             Ok(record) => slots.push(macro_slot_summary(
                 slot_u8,
-                entry.crc,
                 entry.active_length,
                 record,
                 None,
@@ -1004,21 +926,16 @@ pub fn read_macros(expected_device_path: &str) -> Result<MacroSummary, String> {
             }),
         }
     }
-    Ok(MacroSummary {
-        device: device_summary,
-        list_response: spaced_hex(&list),
-        slots,
-    })
+    Ok(slots)
 }
 
 pub fn write_macro(
     expected_device_path: &str,
     slot: u8,
     raw_record: Vec<u8>,
-) -> Result<MacroWriteResult, String> {
+) -> Result<MacroSlotSummary, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device_summary = summary(info);
     let device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -1044,24 +961,17 @@ pub fn write_macro(
     if after_record != normalized {
         return Err("macro D9 readback does not match the normalized write data".into());
     }
-    Ok(MacroWriteResult {
-        device: device_summary,
-        slot: macro_slot_summary(
-            slot,
-            u16::from_be_bytes([after_record[0], after_record[1]]),
-            after_record.len(),
-            after_record,
-            None,
-        ),
-        ack: spaced_hex(&ack_wire[..usize::from(ack_wire[1])]),
-        ack_value,
-    })
+    Ok(macro_slot_summary(
+        slot,
+        after_record.len(),
+        after_record,
+        None,
+    ))
 }
 
-fn read_profile(expected_device_path: &str) -> Result<(DeviceSummary, Vec<u8>), String> {
+fn read_profile(expected_device_path: &str) -> Result<Vec<u8>, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
-    let summary = summary(info);
     let device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -1097,7 +1007,7 @@ fn read_profile(expected_device_path: &str) -> Result<(DeviceSummary, Vec<u8>), 
             && profile.len() >= length
         {
             profile.truncate(length);
-            return Ok((summary, profile));
+            return Ok(profile);
         }
     }
     Err("profile did not complete within 16 reports".into())
@@ -1136,13 +1046,9 @@ fn read_profile_size(expected_device_path: &str) -> Result<usize, String> {
     protocol::decode_profile_size(&report[..read])
 }
 
-fn write_profile(
-    profile: &[u8],
-    expected_device_path: &str,
-) -> Result<(DeviceSummary, Vec<u8>, u8), String> {
+fn write_profile(profile: &[u8], expected_device_path: &str) -> Result<(), String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device_summary = summary(info);
     let hid_device = api
         .open_path(info.path())
         .map_err(|error| error.to_string())?;
@@ -1158,8 +1064,8 @@ fn write_profile(
         return Err("timed out waiting for SetBaseProfile ACK".into());
     }
     let wire = protocol::wire_bytes(&ack[..read]);
-    let value = protocol::validate_set_profile_ack(wire)?;
-    Ok((device_summary, wire[..usize::from(wire[1])].to_vec(), value))
+    protocol::validate_set_profile_ack(wire)?;
+    Ok(())
 }
 
 fn write_report(device: &HidDevice, report: &[u8]) -> Result<(), String> {
@@ -1281,17 +1187,8 @@ fn settings_summary(profile: &[u8]) -> Result<ControllerSettingsSummary, String>
         },
         rapid_fire: RapidFireSummary {
             keys: settings.rapid_fire.keys.to_vec(),
+            speed_index: settings.rapid_fire.speed_index,
         },
-        rapid_fire_speed_index: settings.rapid_fire.speed_index,
-        rapid_fire_timing: settings
-            .rapid_fire
-            .speed_index
-            .and_then(protocol::rapid_fire_timing)
-            .map(|timing| RapidFireTimingSummary {
-                period_ms: timing.period_ms,
-                half_period_ms: timing.half_period_ms,
-                hz: timing.hz,
-            }),
         key_bindings: settings
             .key_bindings
             .into_iter()
@@ -1306,36 +1203,28 @@ fn signed_stabilization(raw: u8) -> i16 {
 
 fn macro_slot_summary(
     slot: u8,
-    listed_crc: u16,
     listed_length: usize,
     record: Vec<u8>,
     error: Option<String>,
 ) -> MacroSlotSummary {
-    let (crc, active_length, setting, m_key, run_key, flags, repeat) =
-        if record.len() >= protocol::MACRO_HEADER_LENGTH {
-            (
-                u16::from_be_bytes([record[0], record[1]]),
-                usize::from(u16::from_be_bytes([record[2], record[3]])),
-                record[4],
-                record[5],
-                record[6],
-                record[7],
-                u16::from_be_bytes([record[8], record[9]]),
-            )
-        } else {
-            (listed_crc, listed_length, 0, 0, 0, 0, 0)
-        };
+    let (step_count, run_key) = if record.len() >= protocol::MACRO_HEADER_LENGTH {
+        let active_length = usize::from(u16::from_be_bytes([record[2], record[3]]));
+        (
+            active_length.saturating_sub(protocol::MACRO_HEADER_LENGTH)
+                / protocol::MACRO_STEP_LENGTH,
+            record[6],
+        )
+    } else {
+        (
+            listed_length.saturating_sub(protocol::MACRO_HEADER_LENGTH)
+                / protocol::MACRO_STEP_LENGTH,
+            0,
+        )
+    };
     MacroSlotSummary {
         slot,
-        crc: format!("{crc:04X}"),
-        active_length,
-        step_count: active_length.saturating_sub(protocol::MACRO_HEADER_LENGTH)
-            / protocol::MACRO_STEP_LENGTH,
-        setting,
-        m_key,
         run_key,
-        flags,
-        repeat,
+        step_count,
         raw_record: record,
         error,
     }
@@ -1515,7 +1404,6 @@ fn is_config_info(info: &hidapi::DeviceInfo) -> bool {
 fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {
     DeviceSummary {
         vendor_product: format!("VID_{:04X} PID_{:04X}", info.vendor_id(), info.product_id()),
-        usage: format!("0x{:04X}:0x{:04X}", info.usage_page(), info.usage()),
         product: if is_config_info(info) {
             HID_DEVICE_PRODUCT_NAME.to_string()
         } else {
@@ -1528,14 +1416,6 @@ fn summary(info: &hidapi::DeviceInfo) -> DeviceSummary {
         },
         path: info.path().to_string_lossy().into_owned(),
     }
-}
-
-fn spaced_hex(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[cfg(test)]

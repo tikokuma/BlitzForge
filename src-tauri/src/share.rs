@@ -5,7 +5,6 @@ const SHARE_CONFIG_URL: &str = "http://m.bigbigwon.com:8080/dev/shareConfig";
 const IMPORT_SHARE_CONFIG_URL: &str = "http://m.bigbigwon.com:8080/dev/importShareConfig";
 const SHARE_CONFIG_TYPE: i64 = 3;
 
-#[derive(Clone)]
 pub struct ShareProfile {
     pub name: String,
     pub phone_uuid: String,

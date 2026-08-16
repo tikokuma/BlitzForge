@@ -1,6 +1,7 @@
 import { byId } from "../dom";
 import {
   clampPercentage,
+  compensationAmount,
   constrainCurve,
   curvesEqual,
   curveYBounds,
@@ -18,11 +19,10 @@ export type DiagnosticStickSettings = {
   rightStick: { curve: CurveSettings; circularAlgorithm: boolean };
 };
 
-export type CurveEditorSettings = {
-  rectangleAlgorithm: RectangleAlgorithmSettings;
-  leftStick: CurveSettings;
-  rightStick: CurveSettings;
-};
+type CurveEditorSettings = Pick<
+  ControllerSettings,
+  "rectangleAlgorithm" | "leftStick" | "rightStick"
+>;
 
 export type CurveEditor = {
   setup: () => void;
@@ -135,6 +135,60 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     edgeCompensation.setAttribute("height", String(edgeCompensationHeight));
     byId("curve-center-label").textContent = `センター ${curve.center}`;
     byId("curve-edge-label").textContent = `エッジ ${curve.edge}`;
+    updateStickOutputPreview(curve);
+  }
+
+  function updateStickOutputPreview(curve: Pick<CurveSettings, "center" | "edge">): void {
+    const baseRadius = 74;
+    const centerZone = byId("stick-output-center-zone", SVGCircleElement);
+    const edgeZone = byId("stick-output-edge-zone", SVGCircleElement);
+    const centerCompensation = compensationAmount(curve.center);
+    const centerDeadzone = Math.max(0, curve.center);
+    const edgeCompensation = compensationAmount(curve.edge);
+    const edgeDeadzone = Math.max(0, curve.edge);
+
+    if (curve.center === 0) {
+      centerZone.setAttribute("display", "none");
+    } else {
+      centerZone.setAttribute("display", "inline");
+      centerZone.setAttribute("r", String(baseRadius * Math.max(centerCompensation, centerDeadzone) / 100));
+      centerZone.setAttribute("class", [
+        "stick-output-zone",
+        "stick-output-center-zone",
+        curve.center < 0 ? "compensation" : "deadzone",
+      ].join(" "));
+      centerZone.setAttribute("stroke-width", curve.center < 0 ? "0" : "2.5");
+    }
+
+    if (curve.edge === 0) {
+      edgeZone.setAttribute("display", "none");
+    } else {
+      edgeZone.setAttribute("display", "inline");
+      edgeZone.setAttribute("class", [
+        "stick-output-zone",
+        "stick-output-edge-zone",
+        curve.edge < 0 ? "compensation" : "deadzone",
+      ].join(" "));
+      edgeZone.setAttribute(
+        "stroke-width",
+        String(curve.edge < 0 ? 3 + edgeCompensation * 0.1 : edgeDeadzone * 0.65),
+      );
+    }
+
+    const centerDescription = curve.center < 0
+      ? `センター補償 ${centerCompensation}`
+      : curve.center > 0
+        ? `センターデッドゾーン ${centerDeadzone}`
+        : "センター標準";
+    const edgeDescription = curve.edge < 0
+      ? `エッジ補償 ${edgeCompensation}`
+      : curve.edge > 0
+        ? `エッジデッドゾーン ${edgeDeadzone}`
+        : "エッジ標準";
+    byId("stick-output-preview").setAttribute(
+      "aria-label",
+      `スティック出力の概略図。${centerDescription}、${edgeDescription}`,
+    );
   }
 
   function setActiveCurve(curve: CurveSettings, changed?: CurveChange): void {

@@ -15,8 +15,6 @@ import type {
   VibrationSettings,
 } from "../models";
 
-export type { DiagnosticStickSettings } from "./curve-editor";
-
 export type SettingsEditor = {
   setup: () => void;
   render: (profile: ProfileSummary) => Promise<void>;
@@ -61,10 +59,10 @@ export function createSettingsEditor(options: SettingsEditorOptions): SettingsEd
   function markKeymapSettingsDirty(): void {
     const settings = baselineControllerSettings;
     if (settings) {
-      const input = activeKeymapEditor().readSettings();
-      keymapDirty = settings.rapidFire.keys.length !== input.rapidFire.keys.length
-        || !settings.rapidFire.keys.every((value, index) => value === input.rapidFire.keys[index])
-        || settings.rapidFireSpeedIndex !== input.rapidFire.speedIndex
+        const input = activeKeymapEditor().readSettings();
+        keymapDirty = settings.rapidFire.keys.length !== input.rapidFire.keys.length
+          || !settings.rapidFire.keys.every((value, index) => value === input.rapidFire.keys[index])
+          || settings.rapidFire.speedIndex !== input.rapidFire.speedIndex
         || settings.keyBindings.length !== input.keyBindings.length
         || !settings.keyBindings.every((value, index) => {
           const candidate = input.keyBindings[index];
@@ -84,10 +82,6 @@ export function createSettingsEditor(options: SettingsEditorOptions): SettingsEd
         editor.setup();
         keymapEditor = editor;
         return editor;
-      })
-      .catch((error: unknown) => {
-        keymapEditorPromise = null;
-        throw error;
       });
     return keymapEditorPromise;
   }
@@ -116,10 +110,7 @@ export function createSettingsEditor(options: SettingsEditorOptions): SettingsEd
 
   function renderControllerSettings(settings: ControllerSettings): void {
     curveEditor.render(settings);
-    activeKeymapEditor().render(settings.keyBindings, {
-      ...settings.rapidFire,
-      speedIndex: settings.rapidFireSpeedIndex,
-    });
+    activeKeymapEditor().render(settings.keyBindings, settings.rapidFire);
     keymapDirty = false;
   }
 

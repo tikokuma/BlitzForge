@@ -1,6 +1,5 @@
 export type DeviceSummary = {
   vendorProduct: string;
-  usage: string;
   product: string;
   profileName: string;
   path: string;
@@ -30,9 +29,6 @@ export type ProfileListEntry = {
   revision: number;
   name: string;
   deviceUuid: string;
-  deviceName: string;
-  firmwareVersion: string;
-  zkmVersion: string;
   createdAt: string;
   profileVersion: string | null;
   active: boolean;
@@ -65,7 +61,6 @@ export type ControllerSettings = {
   leftStick: CurveSettings;
   rightStick: CurveSettings;
   rapidFire: RapidFireSettings;
-  rapidFireSpeedIndex: number | null;
   keyBindings: string[];
 };
 
@@ -82,9 +77,6 @@ export type VibrationSettings = {
 export type VibrationMode = "off" | "strong" | "standard" | "weak" | "custom";
 
 export type ProfileSummary = {
-  device: DeviceSummary | null;
-  storedCrc: string;
-  computedCrc: string;
   vibration: VibrationSettings;
   settings: ControllerSettings;
   rawProfile: number[];
@@ -98,7 +90,6 @@ export type ProfileDocument = ProfileSummary & {
   deviceName: string;
   firmwareVersion: string;
   zkmVersion: string;
-  createdAt: string;
   snapshot: ProfileSnapshot | null;
 };
 
@@ -113,8 +104,6 @@ export type SaveProfileInput = {
   zkmVersion: string;
   snapshot: ProfileSnapshot | null;
 };
-
-export type CommitMode = "save" | "saveAndApply";
 
 export type MacroCommitInput = {
   slot: number;
@@ -131,17 +120,12 @@ export type CommitProfileInput = {
   deviceUuid: string | null;
   deviceSettings: DeviceSettings | null;
   deviceSettingsBaseline: DeviceSettings | null;
-  mode: CommitMode;
 };
 
 export type SettingChange = {
   label: string;
   before: string;
   after: string;
-};
-
-export type CommitPreview = {
-  changes: SettingChange[];
 };
 
 export type CommitResult = {
@@ -154,53 +138,25 @@ export type CommitResult = {
   deviceSettingsSaved: boolean;
   warnings: string[];
   profile: ProfileDocument | null;
-  macro: MacroWriteResult | null;
+  macro: MacroSlotSummary | null;
   appliedProfile: ProfileSummary | null;
-  deviceSettings: DeviceSettingsWriteResult | null;
-};
-
-export type ApplyProfileResult = {
-  profile: ProfileSummary;
-  ack: string;
-  ackValue: number;
+  deviceSettings: DeviceSettings | null;
 };
 
 export type ControllerSettingsInput = {
   rectangleAlgorithm: RectangleAlgorithmSettings;
   leftStick: CurveSettings;
   rightStick: CurveSettings;
-  rapidFire: {
-    keys: Array<boolean | null>;
-    speedIndex: number | null;
-  };
+  rapidFire: RapidFireSettings;
   keyBindings: string[];
 };
 
 export type MacroSlotSummary = {
   slot: number;
-  crc: string;
-  activeLength: number;
   stepCount: number;
-  setting: number;
-  mKey: number;
   runKey: number;
-  flags: number;
-  repeat: number;
   rawRecord: number[];
   error: string | null;
-};
-
-export type MacroSummary = {
-  device: DeviceSummary;
-  listResponse: string;
-  slots: MacroSlotSummary[];
-};
-
-export type MacroWriteResult = {
-  device: DeviceSummary;
-  slot: MacroSlotSummary;
-  ack: string;
-  ackValue: number;
 };
 
 export type StepAccuracySettings = {
@@ -222,13 +178,6 @@ export type PollingMeasurement = {
   maxInterval: number;
   intervalJitter: number;
   intervals: number[];
-};
-
-export type DeviceSettingsWriteResult = {
-  device: DeviceSummary;
-  settings: DeviceSettings;
-  pollingCommand: string;
-  stepAccuracyCommand: string;
 };
 
 export type KeymapChoice =

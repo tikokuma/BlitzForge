@@ -33,7 +33,7 @@ BlitzForgeはコントローラーへ設定を書き込みます。
 
 初回の書き込み前には、次の場所へバックアップを作成します。
 
-`%LOCALAPPDATA%\\com.bigbigwon.lite\\backups`
+`%LOCALAPPDATA%\\io.blitzforge.desktop\\backups`
 
 通常の起動・編集・保存ではネットワーク通信を行いません。
 Shareコードを使う場合だけ、公式アプリと互換性のあるShare APIへ設定データを送信します。

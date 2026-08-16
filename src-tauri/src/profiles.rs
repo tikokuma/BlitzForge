@@ -13,6 +13,7 @@ use crate::{device, protocol};
 
 const DATABASE_DIRECTORY: &str = "GamepadAssistant";
 const DATABASE_FILE: &str = "Config.db";
+const BACKUP_DIRECTORY: &str = "io.blitzforge.desktop";
 const TABLE_NAME: &str = "t_Config";
 const REQUIRED_COLUMNS: [&str; 12] = [
     "FID",
@@ -83,9 +84,6 @@ pub struct ProfileListEntry {
     pub revision: u64,
     pub name: String,
     pub device_uuid: String,
-    pub device_name: String,
-    pub firmware_version: String,
-    pub zkm_version: String,
     pub created_at: String,
     pub profile_version: Option<String>,
     pub active: bool,
@@ -95,8 +93,6 @@ pub struct ProfileListEntry {
     pub(crate) normalized_profile: Option<Arc<[u8]>>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ProfileDocument {
     pub id: i64,
     pub phone_uuid: String,
@@ -105,7 +101,6 @@ pub struct ProfileDocument {
     pub device_name: String,
     pub firmware_version: String,
     pub zkm_version: String,
-    pub created_at: String,
     pub raw_profile: Vec<u8>,
     pub snapshot: ProfileSnapshot,
 }
@@ -607,9 +602,6 @@ fn list_entry(snapshot: ProfileSnapshot) -> ProfileListEntry {
         revision: 0,
         name: snapshot.name.clone(),
         device_uuid: snapshot.device_uuid.clone(),
-        device_name: snapshot.device_name.clone(),
-        firmware_version: snapshot.firmware_version.clone(),
-        zkm_version: snapshot.zkm_version.clone(),
         created_at: snapshot.created_at.clone(),
         profile_version,
         active: false,
@@ -629,7 +621,6 @@ fn document_from_snapshot(snapshot: ProfileSnapshot) -> Result<ProfileDocument, 
         device_name: snapshot.device_name.clone(),
         firmware_version: snapshot.firmware_version.clone(),
         zkm_version: snapshot.zkm_version.clone(),
-        created_at: snapshot.created_at.clone(),
         raw_profile,
         snapshot,
     })
@@ -668,7 +659,7 @@ fn backup_database(database_path: &Path) -> Result<(), String> {
     let backup_root = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(env::temp_dir)
-        .join("com.bigbigwon.lite")
+        .join(BACKUP_DIRECTORY)
         .join("backups");
     fs::create_dir_all(&backup_root).map_err(|error| error.to_string())?;
     let stamp = SystemTime::now()

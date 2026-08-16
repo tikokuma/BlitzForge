@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deviceUuidsEqual, parseProfileBytes } from "./profile";
+import { deviceUuidsEqual, parseProfileBytes, profileTargetsDevice } from "./profile";
 
 describe("profile byte parsing", () => {
   it("accepts byte arrays and rejects ambiguous or corrupt values", () => {
@@ -23,5 +23,17 @@ describe("device UUID matching", () => {
     expect(deviceUuidsEqual("", "")).toBe(false);
     expect(deviceUuidsEqual("55E8224A", "55E8224A")).toBe(false);
     expect(deviceUuidsEqual("corrupt55E8224A7A680000", "55E8224A7A680000")).toBe(false);
+  });
+});
+
+describe("profile device targeting", () => {
+  it("treats a profile without a UUID as targeting any device", () => {
+    expect(profileTargetsDevice("", "55E8224A7A680000")).toBe(true);
+    expect(profileTargetsDevice("  ", "55E8224A7A680000")).toBe(true);
+  });
+
+  it("uses strict UUID equality when a profile has a UUID", () => {
+    expect(profileTargetsDevice("55E8224A7A680000", "55:e8:22:4a:7a:68:00:00")).toBe(true);
+    expect(profileTargetsDevice("0000000000000000", "55E8224A7A680000")).toBe(false);
   });
 });

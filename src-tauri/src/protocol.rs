@@ -76,7 +76,6 @@ pub struct RapidFireSettings {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MacroListEntry {
-    pub crc: u16,
     pub active_length: usize,
 }
 
@@ -672,7 +671,6 @@ pub fn decode_macro_list(report: &[u8]) -> Result<Vec<MacroListEntry>, String> {
     Ok(payload
         .chunks_exact(4)
         .map(|entry| MacroListEntry {
-            crc: u16::from_be_bytes([entry[0], entry[1]]),
             active_length: usize::from(u16::from_be_bytes([entry[2], entry[3]])),
         })
         .collect())

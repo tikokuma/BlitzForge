@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use device::{
     ControllerSettingsInput, DeviceSession, DeviceSettingsInput, DeviceSettingsSummary,
-    DeviceSettingsWriteResult, MacroSummary, MacroWriteResult, ProfileSummary,
-    VibrationSettingsInput,
+    MacroSlotSummary, ProfileSummary, VibrationSettingsInput,
 };
 
 #[derive(Default)]
@@ -35,13 +34,6 @@ struct ProfileListQuery {
 struct ProfileListResult {
     data_version: i64,
     profiles: Option<Vec<profiles::ProfileListEntry>>,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum CommitMode {
-    Save,
-    SaveAndApply,
 }
 
 #[derive(Deserialize)]
@@ -68,7 +60,6 @@ struct CommitProfileInput {
     device_settings: Option<DeviceSettingsInput>,
     #[serde(default)]
     device_settings_baseline: Option<DeviceSettingsInput>,
-    mode: CommitMode,
 }
 
 #[derive(Serialize)]
@@ -84,15 +75,9 @@ struct CommitResult {
     warnings: Vec<String>,
     profile: Option<ProfileDocumentView>,
     #[serde(rename = "macro")]
-    macro_result: Option<MacroWriteResult>,
+    macro_result: Option<MacroSlotSummary>,
     applied_profile: Option<ProfileSummary>,
-    device_settings: Option<DeviceSettingsWriteResult>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CommitPreview {
-    changes: Vec<device::SettingChange>,
+    device_settings: Option<DeviceSettingsSummary>,
 }
 
 struct PreparedCommit {
@@ -138,17 +123,13 @@ struct ProfileDocumentView {
     device_name: String,
     firmware_version: String,
     zkm_version: String,
-    created_at: String,
     snapshot: Option<profiles::ProfileSnapshot>,
     #[serde(flatten)]
     summary: ProfileSummary,
 }
 
-fn saved_profile_view(
-    document: profiles::ProfileDocument,
-    device: Option<device::DeviceSummary>,
-) -> Result<ProfileDocumentView, String> {
-    let summary = device::build_profile_summary(document.raw_profile, device)?;
+fn saved_profile_view(document: profiles::ProfileDocument) -> Result<ProfileDocumentView, String> {
+    let summary = device::build_profile_summary(document.raw_profile)?;
     Ok(ProfileDocumentView {
         id: Some(document.id),
         phone_uuid: document.phone_uuid,
@@ -157,7 +138,6 @@ fn saved_profile_view(
         device_name: document.device_name,
         firmware_version: document.firmware_version,
         zkm_version: document.zkm_version,
-        created_at: document.created_at,
         snapshot: Some(document.snapshot),
         summary,
     })
@@ -180,7 +160,6 @@ fn transient_profile_view(
         device_name,
         firmware_version,
         zkm_version,
-        created_at: String::new(),
         snapshot: None,
         summary,
     }
@@ -213,7 +192,7 @@ async fn list_profiles(
             .and_then(|profile| protocol::normalize_v37_profile(&profile).ok())
         {
             for entry in entries {
-                entry.active = same_device_uuid(
+                entry.active = profile_targets_device(
                     &entry.device_uuid,
                     query.device_uuid.as_deref().unwrap_or_default(),
                 ) && entry.normalized_profile.as_deref()
@@ -234,7 +213,7 @@ async fn load_saved_profile(
     id: i64,
 ) -> Result<ProfileDocumentView, String> {
     run_locked(state.profile_store.clone(), "profile store", move |store| {
-        saved_profile_view(profiles::load_saved_profile(store, id)?, None)
+        saved_profile_view(profiles::load_saved_profile(store, id)?)
     })
     .await
 }
@@ -245,7 +224,7 @@ async fn save_profile(
     input: profiles::SaveProfileInput,
 ) -> Result<ProfileDocumentView, String> {
     run_locked(state.profile_store.clone(), "profile store", move |store| {
-        saved_profile_view(profiles::save_profile(store, input)?, None)
+        saved_profile_view(profiles::save_profile(store, input)?)
     })
     .await
 }
@@ -265,13 +244,13 @@ async fn commit_profile(
 }
 
 #[tauri::command]
-async fn preview_profile_commit(input: CommitProfileInput) -> Result<CommitPreview, String> {
+async fn preview_profile_commit(
+    input: CommitProfileInput,
+) -> Result<Vec<device::SettingChange>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut input = input;
         let prepared = prepare_commit(&mut input)?;
-        Ok(CommitPreview {
-            changes: prepared.changes,
-        })
+        Ok(prepared.changes)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -304,7 +283,7 @@ fn commit_profile_blocking(
     };
     let profile_saved = saved_document.is_some();
     let profile = match saved_document {
-        Some(document) => match saved_profile_view(document, None) {
+        Some(document) => match saved_profile_view(document) {
             Ok(view) => Some(view),
             Err(error) => {
                 warnings.push(format!(
@@ -350,7 +329,7 @@ fn commit_profile_blocking(
         match device::apply_profile(candidate, path) {
             Ok(result) => {
                 profile_applied = true;
-                applied_profile = Some(result.profile);
+                applied_profile = Some(result);
             }
             Err(error) => warnings.push(format!("コントローラーへの適用に失敗しました: {error}")),
         }
@@ -438,15 +417,16 @@ fn prepare_commit(input: &mut CommitProfileInput) -> Result<PreparedCommit, Stri
         .filter(|path| !path.trim().is_empty());
     let profile_uuid = input.profile.device_uuid.clone();
     let device_uuid = input.device_uuid.as_deref().unwrap_or_default();
-    let apply_eligible = device_path.is_some() && device_uuid_matches(&profile_uuid, device_uuid);
-    let apply_requested = matches!(input.mode, CommitMode::SaveAndApply) && apply_eligible;
+    let apply_eligible =
+        device_path.is_some() && profile_targets_device(&profile_uuid, device_uuid);
+    let apply_requested = apply_eligible;
     let apply_unavailable_reason = if apply_eligible {
         None
     } else {
         apply_unavailable_reason(device_path.as_deref(), &profile_uuid, device_uuid)
     };
     let mut warnings = Vec::new();
-    if matches!(input.mode, CommitMode::SaveAndApply) && !apply_requested {
+    if !apply_requested {
         warnings.push(
             apply_unavailable_reason
                 .clone()
@@ -528,7 +508,7 @@ fn apply_unavailable_reason(
     if device_path.is_none() {
         return Some("コントローラーが接続されていないため、保存のみを利用できます。".into());
     }
-    if !device_uuid_matches(profile_uuid, device_uuid) {
+    if !profile_targets_device(profile_uuid, device_uuid) {
         return Some(
             "接続中のコントローラーとプロファイルの対象が異なるため、保存のみを利用できます。"
                 .into(),
@@ -537,16 +517,11 @@ fn apply_unavailable_reason(
     None
 }
 
-fn device_uuid_matches(profile_uuid: &str, device_uuid: &str) -> bool {
-    if profile_uuid.trim().is_empty() {
-        return true;
-    }
-    normalize_device_uuid(profile_uuid)
-        .zip(normalize_device_uuid(device_uuid))
-        .is_some_and(|(left, right)| left == right)
+fn profile_targets_device(profile_uuid: &str, device_uuid: &str) -> bool {
+    profile_uuid.trim().is_empty() || device_uuids_equal(profile_uuid, device_uuid)
 }
 
-fn same_device_uuid(left: &str, right: &str) -> bool {
+fn device_uuids_equal(left: &str, right: &str) -> bool {
     normalize_device_uuid(left)
         .zip(normalize_device_uuid(right))
         .is_some_and(|(left, right)| left == right)
@@ -562,6 +537,25 @@ fn normalize_device_uuid(value: &str) -> Option<String> {
             .chars()
             .all(|character| character.is_ascii_hexdigit()))
     .then(|| compact.to_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{device_uuids_equal, profile_targets_device};
+
+    #[test]
+    fn separates_profile_targeting_from_strict_uuid_equality() {
+        assert!(profile_targets_device("", "55E8224A7A680000"));
+        assert!(profile_targets_device(
+            "55E8224A7A680000",
+            "55:e8:22:4a:7a:68:00:00"
+        ));
+        assert!(!profile_targets_device(
+            "0000000000000000",
+            "55E8224A7A680000"
+        ));
+        assert!(!device_uuids_equal("", "55E8224A7A680000"));
+    }
 }
 
 #[tauri::command]
@@ -675,7 +669,7 @@ async fn apply_profile(
     state: tauri::State<'_, AppState>,
     profile: Vec<u8>,
     device_path: String,
-) -> Result<device::ApplyProfileResult, String> {
+) -> Result<ProfileSummary, String> {
     run_locked(
         state.hid_transaction.clone(),
         "HID transaction",
@@ -715,7 +709,7 @@ async fn measure_polling_rate(
 async fn read_macros(
     state: tauri::State<'_, AppState>,
     device_path: String,
-) -> Result<MacroSummary, String> {
+) -> Result<Vec<MacroSlotSummary>, String> {
     run_locked(
         state.hid_transaction.clone(),
         "HID transaction",

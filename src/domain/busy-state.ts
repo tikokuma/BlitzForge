@@ -1,4 +1,4 @@
-export type BusyState = {
+type BusyState = {
   enter: () => void;
   leave: () => void;
   isBusy: () => boolean;
