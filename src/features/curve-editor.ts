@@ -252,10 +252,8 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     if (!Number.isFinite(parsed)) return;
     const value = clampRangeValue(id, parsed);
     byId(id, HTMLInputElement).value = String(value);
-    if (!applyCurveConstraintsForControl(id)) {
-      input.value = String(value);
-      updateRangeOutput(id);
-    }
+    updateRangeOutput(id);
+    updateCurvePreview();
     markDirty();
   }
 

@@ -669,7 +669,9 @@ pub fn decode_macro_list(report: &[u8]) -> Result<Vec<MacroListEntry>, String> {
         return Err(format!("unexpected D5 payload length {}", payload.len()));
     }
     Ok(payload
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|entry| MacroListEntry {
             active_length: usize::from(u16::from_be_bytes([entry[2], entry[3]])),
         })
@@ -820,7 +822,9 @@ pub fn validate_macro_crc(record: &[u8]) -> Result<(), String> {
 
 fn validate_macro_input_masks(record: &[u8]) -> Result<(), String> {
     for (step_index, step) in record[MACRO_HEADER_LENGTH..]
-        .chunks_exact(MACRO_STEP_LENGTH)
+        .as_chunks::<MACRO_STEP_LENGTH>()
+        .0
+        .iter()
         .enumerate()
     {
         let input_mask = u32::from_be_bytes([step[2], step[3], step[4], step[5]]);
