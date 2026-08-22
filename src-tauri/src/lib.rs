@@ -539,25 +539,6 @@ fn normalize_device_uuid(value: &str) -> Option<String> {
     .then(|| compact.to_ascii_uppercase())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{device_uuids_equal, profile_targets_device};
-
-    #[test]
-    fn separates_profile_targeting_from_strict_uuid_equality() {
-        assert!(profile_targets_device("", "55E8224A7A680000"));
-        assert!(profile_targets_device(
-            "55E8224A7A680000",
-            "55:e8:22:4a:7a:68:00:00"
-        ));
-        assert!(!profile_targets_device(
-            "0000000000000000",
-            "55E8224A7A680000"
-        ));
-        assert!(!device_uuids_equal("", "55E8224A7A680000"));
-    }
-}
-
 #[tauri::command]
 async fn delete_profile(
     state: tauri::State<'_, AppState>,

@@ -253,7 +253,6 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     const value = clampRangeValue(id, parsed);
     byId(id, HTMLInputElement).value = String(value);
     updateRangeOutput(id);
-    updateCurvePreview();
     markDirty();
   }
 
@@ -327,7 +326,9 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
   }
 
   function markDirty(): void {
-    dirty = baseline !== null && !settingsEqual(baseline, readSettings());
+    const nextDirty = baseline !== null && !settingsEqual(baseline, readSettings());
+    if (nextDirty === dirty) return;
+    dirty = nextDirty;
     byId("curve-dirty").hidden = !dirty;
     options.onDirtyChanged();
   }

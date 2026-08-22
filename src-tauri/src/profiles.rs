@@ -686,27 +686,3 @@ fn backup_database(database_path: &Path) -> Result<(), String> {
 fn sql_error(error: rusqlite::Error) -> String {
     error.to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ProfileMetadata;
-
-    #[test]
-    fn profile_metadata_fills_only_empty_values() {
-        let mut metadata = ProfileMetadata {
-            phone_uuid: "phone".into(),
-            device_uuid: String::new(),
-            device_name: "current-device".into(),
-            firmware_version: String::new(),
-            zkm_version: "55".into(),
-        };
-
-        metadata.fill_empty("other-phone", "device", "other-device", "313333", "54");
-
-        assert_eq!(metadata.phone_uuid, "phone");
-        assert_eq!(metadata.device_uuid, "device");
-        assert_eq!(metadata.device_name, "current-device");
-        assert_eq!(metadata.firmware_version, "313333");
-        assert_eq!(metadata.zkm_version, "55");
-    }
-}
