@@ -12,12 +12,13 @@ import type {
   ControllerSettingsInput,
   DeviceSettings,
   ProfileSummary,
+  Stick,
   VibrationSettings,
 } from "../models";
 
 export type SettingsEditor = {
   setup: () => void;
-  render: (profile: ProfileSummary) => Promise<void>;
+  render: (profile: ProfileSummary, selectedStick?: Stick) => Promise<void>;
   reset: () => void;
   selectTab: (tab: "stick" | "keymap" | "device" | "vibration" | "macro") => void;
   readControllerSettings: () => ControllerSettingsInput;
@@ -26,6 +27,7 @@ export type SettingsEditor = {
   setDeviceSettings: (settings: DeviceSettings | null) => void;
   getDeviceSettingsBaseline: () => DeviceSettings | null;
   getStickSettings: () => DiagnosticStickSettings;
+  getSelectedStick: () => Stick;
   isDirty: () => boolean;
 };
 
@@ -88,6 +90,7 @@ export function createSettingsEditor(options: SettingsEditorOptions): SettingsEd
 
   function selectTab(tab: "stick" | "keymap" | "device" | "vibration" | "macro"): void {
     const stickVisible = tab === "stick";
+    byId("stick-selector").hidden = !stickVisible;
     byId("settings-stick-section").hidden = !stickVisible;
     byId("settings-keymap-section").hidden = tab !== "keymap";
     byId("settings-device-section").hidden = tab !== "device";
@@ -108,16 +111,16 @@ export function createSettingsEditor(options: SettingsEditorOptions): SettingsEd
     };
   }
 
-  function renderControllerSettings(settings: ControllerSettings): void {
-    curveEditor.render(settings);
+  function renderControllerSettings(settings: ControllerSettings, selectedStick?: Stick): void {
+    curveEditor.render(settings, selectedStick);
     activeKeymapEditor().render(settings.keyBindings, settings.rapidFire);
     keymapDirty = false;
   }
 
-  async function render(profile: ProfileSummary): Promise<void> {
+  async function render(profile: ProfileSummary, selectedStick = curveEditor.getSelectedStick()): Promise<void> {
     await loadKeymapEditor();
     baselineControllerSettings = profile.settings;
-    renderControllerSettings(profile.settings);
+    renderControllerSettings(profile.settings, selectedStick);
     vibrationEditor.render(profile.vibration);
     options.onDirtyChanged();
   }
@@ -165,6 +168,7 @@ export function createSettingsEditor(options: SettingsEditorOptions): SettingsEd
     setDeviceSettings,
     getDeviceSettingsBaseline,
     getStickSettings: curveEditor.getStickSettings,
+    getSelectedStick: curveEditor.getSelectedStick,
     isDirty: () => curveEditor.isDirty()
       || keymapDirty
       || vibrationEditor.isDirty()

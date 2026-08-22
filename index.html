@@ -31,22 +31,11 @@
         <button id="main-tab-diagnostics" class="tab" type="button" aria-selected="false">入力チェック</button>
       </nav>
       <div id="home-view" class="view">
-        <section class="panel device-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="section-kicker">DEVICE</p>
-              <h2 id="device-name">接続を確認しています</h2>
-            </div>
-            <button id="refresh-device" type="button">再検索</button>
-          </div>
-        </section>
-
         <section class="panel profile-panel">
           <div class="panel-heading">
             <div>
               <p class="section-kicker">PROFILE LIBRARY</p>
               <h2>共有プロファイル</h2>
-              <p>公式アプリと同じ Config.db を使用します。</p>
               <p id="active-profile-status" class="profile-current-status">現在使用中: 確認中</p>
             </div>
             <div class="button-row">
@@ -60,20 +49,27 @@
       </div>
 
       <div id="settings-view" class="view" hidden>
-        <div class="settings-toolbar">
-          <button id="back-home" class="back-button">← 概要へ戻る</button>
-          <strong id="settings-profile-name"></strong>
-          <span id="settings-dirty" class="status-pill" hidden>未保存</span>
-          <button id="save-profile" class="primary" disabled>保存して適用</button>
-        </div>
+        <div class="settings-navigation">
+          <div class="settings-toolbar">
+            <button id="back-home" class="back-button">← 概要へ戻る</button>
+            <strong id="settings-profile-name"></strong>
+            <span id="settings-dirty" class="status-pill" hidden>未保存</span>
+            <button id="save-profile" class="primary" disabled>保存して適用</button>
+          </div>
 
-        <nav class="settings-tabs" aria-label="設定カテゴリ">
-          <button id="tab-stick" class="tab active" type="button">スティック</button>
-          <button id="tab-keymap" class="tab" type="button">キーバインド</button>
-          <button id="tab-device" class="tab" type="button">デバイス</button>
-          <button id="tab-vibration" class="tab" type="button">振動</button>
-          <button id="tab-macro" class="tab" type="button">マクロ</button>
-        </nav>
+          <nav class="settings-tabs" aria-label="設定カテゴリ">
+            <button id="tab-stick" class="tab active" type="button">スティック</button>
+            <button id="tab-keymap" class="tab" type="button">キーバインド</button>
+            <button id="tab-device" class="tab" type="button">デバイス</button>
+            <button id="tab-vibration" class="tab" type="button">振動</button>
+            <button id="tab-macro" class="tab" type="button">マクロ</button>
+          </nav>
+
+          <div id="stick-selector" class="stick-selector" role="tablist" aria-label="スティック選択">
+            <button id="stick-left-tab" class="stick-tab active" type="button" role="tab" aria-selected="true">左スティック</button>
+            <button id="stick-right-tab" class="stick-tab" type="button" role="tab" aria-selected="false">右スティック</button>
+          </div>
+        </div>
 
         <section id="settings-stick-section" class="panel settings-section">
           <div class="section-heading">
@@ -82,11 +78,6 @@
               <h2>スティック曲線</h2>
             </div>
             <span id="curve-dirty" class="status-pill" hidden>未保存</span>
-          </div>
-
-          <div class="stick-selector" role="tablist" aria-label="スティック選択">
-            <button id="stick-left-tab" class="stick-tab active" type="button" role="tab" aria-selected="true">左スティック</button>
-            <button id="stick-right-tab" class="stick-tab" type="button" role="tab" aria-selected="false">右スティック</button>
           </div>
 
           <div class="settings-grid">
@@ -168,10 +159,6 @@
                 <div class="preview-heading">
                   <div>
                     <h3>応答曲線プレビュー</h3>
-                  </div>
-                  <div class="preview-value-stack">
-                    <span id="curve-center-label" class="preview-value">センター —</span>
-                    <span id="curve-edge-label" class="preview-value">エッジ —</span>
                   </div>
                 </div>
                 <svg id="curve-preview" class="curve-preview" viewBox="0 0 240 240" role="img" aria-label="スティック応答曲線">

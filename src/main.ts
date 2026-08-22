@@ -17,6 +17,7 @@ import type {
   ProfileDocument,
   ProfileListEntry,
   SettingChange,
+  Stick,
 } from "./models";
 import { createSettingsEditor, type SettingsEditor } from "./features/settings-editor";
 import { createProfileLibrary, type ProfileLibrary } from "./profile-library";
@@ -104,7 +105,6 @@ function syncActions() {
     if (view.inert !== busy) view.inert = busy;
     if (view.getAttribute("aria-busy") !== ariaBusy) view.setAttribute("aria-busy", ariaBusy);
   }
-  setDisabled("refresh-device", busy);
   setDisabled("import-profile", busy);
   setDisabled("new-profile", busy);
   setDisabled("read-device-profile", busy || !deviceSession);
@@ -177,19 +177,9 @@ async function measurePollingRateForInputDiagnostics() {
   return backend.measurePollingRate(session.device.path);
 }
 
-function renderDevice(session: DeviceSession | null) {
-  const name = byId("device-name");
-  if (!session) {
-    name.textContent = "接続を確認しています";
-    return;
-  }
-  name.textContent = session.device.product;
-}
-
 function setConnection(session: DeviceSession | null) {
   deviceSession = session;
   profileContextRevision += 1;
-  renderDevice(session);
 }
 
 function clearProfile() {
@@ -314,8 +304,12 @@ function saveFromDialog(): void {
   void saveAndApplyProfileDocument();
 }
 
-async function setEditingProfile(profile: ProfileDocument, preserveMacro = false) {
-  await settingsEditor.render(profile);
+async function setEditingProfile(
+  profile: ProfileDocument,
+  preserveMacro = false,
+  selectedStick?: Stick,
+) {
+  await settingsEditor.render(profile, selectedStick);
   if (!preserveMacro) macroEditor?.reset();
   editingProfile = profile;
   renderProfile(profile);
@@ -398,17 +392,20 @@ async function duplicateProfile(entry: ProfileListEntry) {
   }
 }
 
-async function renameProfile(entry: ProfileListEntry) {
+async function renameProfile(entry: ProfileListEntry, name: string, input: HTMLInputElement) {
   if (busyState.isBusy()) return;
-  const name = window.prompt("新しいプロファイル名", entry.name);
-  if (name === null || name.trim() === entry.name) return;
+  const nextName = name.trim();
+  if (nextName.length === 0 || nextName === entry.name) {
+    input.value = entry.name || `Profile ${entry.id}`;
+    return;
+  }
   setBusy(true);
   try {
     const source = await backend.loadSavedProfile(entry.id);
     const saved = await backend.saveProfile({
       id: source.id,
       phoneUuid: source.phoneUuid,
-      name,
+      name: nextName,
       rawProfile: source.rawProfile,
       deviceUuid: source.deviceUuid,
       deviceName: source.deviceName,
@@ -419,6 +416,7 @@ async function renameProfile(entry: ProfileListEntry) {
     if (editingProfile?.id === saved.id) await setEditingProfile(saved, true);
     await refreshProfiles();
   } catch (error) {
+    input.value = entry.name || `Profile ${entry.id}`;
     showError(errorMessage(error));
   } finally {
     setBusy(false);
@@ -699,8 +697,8 @@ function buildCommitProfileInput(
   };
 }
 
-async function applyCommitResult(result: CommitResult): Promise<void> {
-  if (result.profile) await setEditingProfile(result.profile, true);
+async function applyCommitResult(result: CommitResult, selectedStick: Stick): Promise<void> {
+  if (result.profile) await setEditingProfile(result.profile, true, selectedStick);
   if (result.macro) macroEditor?.markSaved(result.macro);
   if (result.deviceSettings) applyDeviceSettings(result.deviceSettings);
   if (result.appliedProfile && deviceSession) {
@@ -747,11 +745,12 @@ async function saveAndApplyProfileDocument() {
     if (prompted === null) return;
     name = prompted;
   }
+  const selectedStick = settingsEditor.getSelectedStick();
   let committedResult: CommitResult | null = null;
   setBusy(true);
   try {
     committedResult = await backend.commitProfile(buildCommitProfileInput(profile, name));
-    await applyCommitResult(committedResult);
+    await applyCommitResult(committedResult, selectedStick);
     if (committedResult.profileSaved || committedResult.profileApplied) await refreshProfiles();
     if (committedResult.warnings.length > 0) {
       showError(commitWarningMessage(committedResult));
@@ -773,7 +772,7 @@ async function saveAndApplyProfileDocument() {
             copyInput.profile.id = null;
             copyInput.profile.snapshot = null;
             copyResult = await backend.commitProfile(copyInput);
-            await applyCommitResult(copyResult);
+            await applyCommitResult(copyResult, selectedStick);
             if (copyResult.profileSaved || copyResult.profileApplied) await refreshProfiles();
             if (copyResult.warnings.length > 0) {
               showError(commitWarningMessage(copyResult, "外部変更を上書きせず、別名で保存しました。"));
@@ -821,7 +820,7 @@ const profileLibrary: ProfileLibrary = createProfileLibrary({
   onApply: (id) => void applySavedProfileFromCard(id),
   onShare: (id, button) => void shareSavedProfile(id, button),
   onDuplicate: (entry) => void duplicateProfile(entry),
-  onRename: (entry) => void renameProfile(entry),
+  onRename: (entry, name, input) => void renameProfile(entry, name, input),
   onDelete: (entry) => void deleteProfile(entry),
 });
 
@@ -830,7 +829,6 @@ window.addEventListener("DOMContentLoaded", () => {
   byId("main-tab-home").addEventListener("click", () => showView("home"));
   byId("main-tab-diagnostics").addEventListener("click", () => showView("diagnostics"));
   byId("diagnostics-back-home").addEventListener("click", () => showView("home"));
-  byId("refresh-device").addEventListener("click", () => void scan());
   byId("new-profile").addEventListener("click", () => void createNewProfile());
   byId("read-device-profile").addEventListener("click", () => void readProfileFromDevice());
   byId("import-profile").addEventListener("click", () => void importShareProfile());

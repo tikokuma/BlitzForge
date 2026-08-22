@@ -26,10 +26,11 @@ type CurveEditorSettings = Pick<
 
 export type CurveEditor = {
   setup: () => void;
-  render: (settings: ControllerSettings) => void;
+  render: (settings: ControllerSettings, selectedStick?: Stick) => void;
   reset: () => void;
   readSettings: () => CurveEditorSettings;
   getStickSettings: () => DiagnosticStickSettings;
+  getSelectedStick: () => Stick;
   isDirty: () => boolean;
 };
 
@@ -133,8 +134,6 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     centerCompensation.setAttribute("y", String(220 - centerCompensationHeight));
     centerCompensation.setAttribute("height", String(centerCompensationHeight));
     edgeCompensation.setAttribute("height", String(edgeCompensationHeight));
-    byId("curve-center-label").textContent = `センター ${curve.center}`;
-    byId("curve-edge-label").textContent = `エッジ ${curve.edge}`;
     updateStickOutputPreview(curve);
   }
 
@@ -335,8 +334,8 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     options.onDirtyChanged();
   }
 
-  function render(settings: ControllerSettings): void {
-    const activeStick = selectedStick;
+  function render(settings: ControllerSettings, preferredStick = selectedStick): void {
+    const activeStick = preferredStick;
     baseline = settings;
     curveDrafts = {
       leftStick: constrainCurve(settings.leftStick),
@@ -387,5 +386,13 @@ export function createCurveEditor(options: CurveEditorOptions): CurveEditor {
     };
   }
 
-  return { setup, render, reset, readSettings, getStickSettings, isDirty: () => dirty };
+  return {
+    setup,
+    render,
+    reset,
+    readSettings,
+    getStickSettings,
+    getSelectedStick: () => selectedStick,
+    isDirty: () => dirty,
+  };
 }
