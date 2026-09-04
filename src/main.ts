@@ -44,7 +44,7 @@ let profileDataVersion: number | null = null;
 let profileContextRevision = 0;
 let listedProfileContextRevision = -1;
 let profileRefreshRequestId = 0;
-let focusRefreshTimer: number | null = null;
+let visibilityRefreshTimer: number | null = null;
 
 function clearNotification() {
   if (notificationTimer !== null) {
@@ -865,19 +865,20 @@ window.addEventListener("DOMContentLoaded", () => {
   void scan();
 });
 
-function refreshProfilesAfterFocus() {
-  focusRefreshTimer = null;
+function refreshProfilesAfterVisibilityChange() {
+  visibilityRefreshTimer = null;
   if (document.hidden) return;
   if (busyState.isBusy()) {
-    focusRefreshTimer = window.setTimeout(refreshProfilesAfterFocus, 200);
+    visibilityRefreshTimer = window.setTimeout(refreshProfilesAfterVisibilityChange, 200);
     return;
   }
   void refreshProfiles().catch((error: unknown) => showError(errorMessage(error)));
 }
 
-window.addEventListener("focus", () => {
-  if (focusRefreshTimer !== null) window.clearTimeout(focusRefreshTimer);
-  focusRefreshTimer = window.setTimeout(refreshProfilesAfterFocus, 200);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  if (visibilityRefreshTimer !== null) window.clearTimeout(visibilityRefreshTimer);
+  visibilityRefreshTimer = window.setTimeout(refreshProfilesAfterVisibilityChange, 200);
 });
 
 window.addEventListener("contextmenu", (event) => {

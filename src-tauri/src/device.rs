@@ -207,6 +207,120 @@ pub struct MacroSlotSummary {
     error: Option<String>,
 }
 
+pub(crate) struct ConfigDevice {
+    device: HidDevice,
+}
+
+impl ConfigDevice {
+    pub(crate) fn apply_profile(&self, input: Vec<u8>) -> Result<ProfileSummary, String> {
+        let profile = protocol::normalize_v37_profile(&input)?;
+        write_profile(&self.device, &profile)?;
+        build_profile_summary(profile)
+    }
+
+    pub(crate) fn read_device_settings(&self) -> Result<DeviceSettingsSummary, String> {
+        let polling_rate = protocol::decode_polling_rate(&transact_short(
+            &self.device,
+            &protocol::get_polling_rate_report(),
+            0xf6,
+        )?)?;
+        let step_accuracy = protocol::decode_step_accuracy(&transact_short(
+            &self.device,
+            &protocol::get_step_accuracy_report(),
+            0xf7,
+        )?)?;
+        Ok(DeviceSettingsSummary {
+            polling_rate,
+            step_accuracy: step_accuracy_summary(step_accuracy),
+        })
+    }
+
+    pub(crate) fn set_device_settings(
+        &self,
+        input: DeviceSettingsInput,
+    ) -> Result<DeviceSettingsSummary, String> {
+        validate_device_settings(&input)?;
+        let step_accuracy = protocol::StepAccuracySettings {
+            mode: input.step_accuracy.mode,
+            value: input.step_accuracy.value,
+            extension: input.step_accuracy.extension,
+        };
+        let polling_report = protocol::build_set_polling_rate_report(input.polling_rate);
+        send_device_setting(&self.device, &polling_report).map_err(|error| {
+            format!("F6 polling-rate write failed; F7 step-accuracy was not attempted: {error}")
+        })?;
+        let step_accuracy_report = protocol::build_set_step_accuracy_report(step_accuracy);
+        send_device_setting(&self.device, &step_accuracy_report).map_err(|error| {
+            format!("F6 polling-rate write was sent, but F7 step-accuracy write failed: {error}")
+        })?;
+        let readback = self.read_device_settings().map_err(|error| {
+            format!("F6/F7 settings were written, but readback failed: {error}")
+        })?;
+        if readback.polling_rate != input.polling_rate {
+            return Err(format!(
+                "F6 polling-rate readback mismatch: requested {}, received {}",
+                input.polling_rate, readback.polling_rate
+            ));
+        }
+        if readback.step_accuracy.mode != step_accuracy.mode
+            || readback.step_accuracy.value != step_accuracy.value
+            || readback.step_accuracy.extension != step_accuracy.extension
+        {
+            return Err(
+                "F7 step-accuracy readback mismatched the requested value after both writes were sent"
+                    .into(),
+            );
+        }
+
+        Ok(readback)
+    }
+
+    pub(crate) fn write_macro(
+        &self,
+        slot: u8,
+        raw_record: Vec<u8>,
+    ) -> Result<MacroSlotSummary, String> {
+        let normalized = protocol::normalize_macro_record(&raw_record)?;
+        protocol::validate_macro_crc(&normalized)?;
+        for report in protocol::build_macro_write_reports(slot, &normalized)? {
+            write_report(&self.device, &report)?;
+        }
+        let mut ack = [0_u8; protocol::HID_REPORT_LENGTH];
+        let read = self
+            .device
+            .read_timeout(&mut ack, ACK_TIMEOUT_MS)
+            .map_err(|error| error.to_string())?;
+        if read == 0 {
+            return Err("timed out waiting for macro D8 ACK".into());
+        }
+        let ack_wire = protocol::wire_bytes(&ack[..read]);
+        let ack_value = protocol::validate_macro_write_ack(ack_wire)?;
+        if ack_value != 0 {
+            return Err(format!("macro D8 returned status 0x{ack_value:02X}"));
+        }
+        let after_request = protocol::get_macro_info_report(slot)?;
+        let after_record = transact_macro_info(&self.device, &after_request)?;
+        if after_record != normalized {
+            return Err("macro D9 readback does not match the normalized write data".into());
+        }
+        Ok(macro_slot_summary(
+            slot,
+            after_record.len(),
+            after_record,
+            None,
+        ))
+    }
+}
+
+pub(crate) fn open_config_device(expected_device_path: &str) -> Result<ConfigDevice, String> {
+    let api = HidApi::new().map_err(|error| error.to_string())?;
+    let info = find_config_info_at_path(&api, expected_device_path)?;
+    let device = api
+        .open_path(info.path())
+        .map_err(|error| error.to_string())?;
+    Ok(ConfigDevice { device })
+}
+
 pub fn scan_device() -> Result<Option<DeviceSession>, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let Some(info) = find_config_info(&api) else {
@@ -239,9 +353,7 @@ pub fn load_profile_summary(input: Vec<u8>) -> Result<ProfileSummary, String> {
 }
 
 pub fn apply_profile(input: Vec<u8>, device_path: &str) -> Result<ProfileSummary, String> {
-    let profile = protocol::normalize_v37_profile(&input)?;
-    write_profile(&profile, device_path)?;
-    build_profile_summary(profile)
+    open_config_device(device_path)?.apply_profile(input)
 }
 
 pub fn build_profile_summary(profile: Vec<u8>) -> Result<ProfileSummary, String> {
@@ -776,64 +888,7 @@ fn keyboard_modifier_label(value: u8) -> Option<&'static str> {
 }
 
 pub fn read_device_settings(expected_device_path: &str) -> Result<DeviceSettingsSummary, String> {
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
-    let polling_rate = protocol::decode_polling_rate(&transact_short(
-        &device,
-        &protocol::get_polling_rate_report(),
-        0xf6,
-    )?)?;
-    let step_accuracy = protocol::decode_step_accuracy(&transact_short(
-        &device,
-        &protocol::get_step_accuracy_report(),
-        0xf7,
-    )?)?;
-    Ok(DeviceSettingsSummary {
-        polling_rate,
-        step_accuracy: step_accuracy_summary(step_accuracy),
-    })
-}
-
-pub fn set_device_settings(
-    expected_device_path: &str,
-    input: DeviceSettingsInput,
-) -> Result<DeviceSettingsSummary, String> {
-    validate_device_settings(&input)?;
-    let step_accuracy = protocol::StepAccuracySettings {
-        mode: input.step_accuracy.mode,
-        value: input.step_accuracy.value,
-        extension: input.step_accuracy.extension,
-    };
-    let polling_report = protocol::build_set_polling_rate_report(input.polling_rate);
-    send_device_setting(expected_device_path, &polling_report).map_err(|error| {
-        format!("F6 polling-rate write failed; F7 step-accuracy was not attempted: {error}")
-    })?;
-    let step_accuracy_report = protocol::build_set_step_accuracy_report(step_accuracy);
-    send_device_setting(expected_device_path, &step_accuracy_report).map_err(|error| {
-        format!("F6 polling-rate write was sent, but F7 step-accuracy write failed: {error}")
-    })?;
-    let readback = read_device_settings(expected_device_path)
-        .map_err(|error| format!("F6/F7 settings were written, but readback failed: {error}"))?;
-    if readback.polling_rate != input.polling_rate {
-        return Err(format!(
-            "F6 polling-rate readback mismatch: requested {}, received {}",
-            input.polling_rate, readback.polling_rate
-        ));
-    }
-    if readback.step_accuracy.mode != step_accuracy.mode
-        || readback.step_accuracy.value != step_accuracy.value
-        || readback.step_accuracy.extension != step_accuracy.extension
-    {
-        return Err(
-            "F7 step-accuracy readback mismatched the requested value after both writes were sent"
-                .into(),
-        );
-    }
-
-    Ok(readback)
+    open_config_device(expected_device_path)?.read_device_settings()
 }
 
 pub fn measure_polling_rate(
@@ -929,46 +984,6 @@ pub fn read_macros(expected_device_path: &str) -> Result<Vec<MacroSlotSummary>, 
     Ok(slots)
 }
 
-pub fn write_macro(
-    expected_device_path: &str,
-    slot: u8,
-    raw_record: Vec<u8>,
-) -> Result<MacroSlotSummary, String> {
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
-    let normalized = protocol::normalize_macro_record(&raw_record)?;
-    protocol::validate_macro_crc(&normalized)?;
-    for report in protocol::build_macro_write_reports(slot, &normalized)? {
-        write_report(&device, &report)?;
-    }
-    let mut ack = [0_u8; protocol::HID_REPORT_LENGTH];
-    let read = device
-        .read_timeout(&mut ack, ACK_TIMEOUT_MS)
-        .map_err(|error| error.to_string())?;
-    if read == 0 {
-        return Err("timed out waiting for macro D8 ACK".into());
-    }
-    let ack_wire = protocol::wire_bytes(&ack[..read]);
-    let ack_value = protocol::validate_macro_write_ack(ack_wire)?;
-    if ack_value != 0 {
-        return Err(format!("macro D8 returned status 0x{ack_value:02X}"));
-    }
-    let after_request = protocol::get_macro_info_report(slot)?;
-    let after_record = transact_macro_info(&device, &after_request)?;
-    if after_record != normalized {
-        return Err("macro D9 readback does not match the normalized write data".into());
-    }
-    Ok(macro_slot_summary(
-        slot,
-        after_record.len(),
-        after_record,
-        None,
-    ))
-}
-
 fn read_profile(expected_device_path: &str) -> Result<Vec<u8>, String> {
     let api = HidApi::new().map_err(|error| error.to_string())?;
     let info = find_config_info_at_path(&api, expected_device_path)?;
@@ -1046,18 +1061,13 @@ fn read_profile_size(expected_device_path: &str) -> Result<usize, String> {
     protocol::decode_profile_size(&report[..read])
 }
 
-fn write_profile(profile: &[u8], expected_device_path: &str) -> Result<(), String> {
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info_at_path(&api, expected_device_path)?;
-    let hid_device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
+fn write_profile(device: &HidDevice, profile: &[u8]) -> Result<(), String> {
     for report in protocol::build_v37_write_reports(profile)? {
-        write_report(&hid_device, &report)?;
+        write_report(device, &report)?;
     }
 
     let mut ack = [0_u8; protocol::HID_REPORT_LENGTH];
-    let read = hid_device
+    let read = device
         .read_timeout(&mut ack, ACK_TIMEOUT_MS)
         .map_err(|error| error.to_string())?;
     if read == 0 {
@@ -1076,13 +1086,8 @@ fn write_report(device: &HidDevice, report: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn send_device_setting(expected_device_path: &str, report: &[u8]) -> Result<(), String> {
-    let api = HidApi::new().map_err(|error| error.to_string())?;
-    let info = find_config_info_at_path(&api, expected_device_path)?;
-    let device = api
-        .open_path(info.path())
-        .map_err(|error| error.to_string())?;
-    write_report(&device, report)
+fn send_device_setting(device: &HidDevice, report: &[u8]) -> Result<(), String> {
+    write_report(device, report)
 }
 
 fn transact_short(device: &HidDevice, request: &[u8], command: u8) -> Result<Vec<u8>, String> {

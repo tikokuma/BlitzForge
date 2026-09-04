@@ -306,17 +306,31 @@ fn commit_profile_blocking(
         None
     };
 
+    let (config_device, config_device_error) = if needs_hid {
+        match device_path.as_deref() {
+            Some(path) => match device::open_config_device(path) {
+                Ok(device) => (Some(device), None),
+                Err(error) => (None, Some(error)),
+            },
+            None => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+
     let mut macro_saved = false;
     let mut macro_result = None;
     if macro_requested && let Some(macro_input) = macro_write {
-        if let Some(path) = device_path.as_deref() {
-            match device::write_macro(path, macro_input.slot, macro_input.raw_record) {
+        if let Some(device) = config_device.as_ref() {
+            match device.write_macro(macro_input.slot, macro_input.raw_record) {
                 Ok(result) => {
                     macro_saved = true;
                     macro_result = Some(result);
                 }
                 Err(error) => warnings.push(format!("マクロ保存に失敗しました: {error}")),
             }
+        } else if let Some(error) = config_device_error.as_deref() {
+            warnings.push(format!("マクロ保存に失敗しました: {error}"));
         } else {
             warnings
                 .push("コントローラーが接続されていないため、マクロを保存できませんでした".into());
@@ -325,27 +339,35 @@ fn commit_profile_blocking(
 
     let mut profile_applied = false;
     let mut applied_profile = None;
-    if apply_requested && let Some(path) = device_path.as_deref() {
-        match device::apply_profile(candidate, path) {
-            Ok(result) => {
-                profile_applied = true;
-                applied_profile = Some(result);
+    if apply_requested {
+        if let Some(device) = config_device.as_ref() {
+            match device.apply_profile(candidate) {
+                Ok(result) => {
+                    profile_applied = true;
+                    applied_profile = Some(result);
+                }
+                Err(error) => {
+                    warnings.push(format!("コントローラーへの適用に失敗しました: {error}"))
+                }
             }
-            Err(error) => warnings.push(format!("コントローラーへの適用に失敗しました: {error}")),
+        } else if let Some(error) = config_device_error.as_deref() {
+            warnings.push(format!("コントローラーへの適用に失敗しました: {error}"));
         }
     }
 
     let mut device_settings_saved = false;
     let mut device_settings_result = None;
     if device_settings_requested && let Some(settings) = device_settings {
-        if let Some(path) = device_path.as_deref() {
-            match device::set_device_settings(path, settings) {
+        if let Some(device) = config_device.as_ref() {
+            match device.set_device_settings(settings) {
                 Ok(result) => {
                     device_settings_saved = true;
                     device_settings_result = Some(result);
                 }
                 Err(error) => warnings.push(format!("デバイス設定保存に失敗しました: {error}")),
             }
+        } else if let Some(error) = config_device_error.as_deref() {
+            warnings.push(format!("デバイス設定保存に失敗しました: {error}"));
         } else {
             warnings.push(
                 "コントローラーが接続されていないため、デバイス設定を保存できませんでした".into(),
